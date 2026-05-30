@@ -44,7 +44,9 @@ fetch(tickers: list[str], *, as_of: date | None = None) -> dict[ticker, price]
 
 ## Open questions to sharpen (the real agenda)
 
-These are the decisions we'll work through as we build. Nothing here is decided yet.
+These are the decisions we'll work through as we build. Answers + reasoning are tracked in
+the companion **[data-pipeline-answers.md](./data-pipeline-answers.md)** (A–E all decided —
+incl. FMP as the paid upgrade target and Fidelity ruled out as an API; F parked).
 
 ### A. Scope of fetched data
 - A1. First slice = last price only? (assumed yes)
