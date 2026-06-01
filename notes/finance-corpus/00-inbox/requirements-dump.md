@@ -238,6 +238,24 @@ The planner depends on it through exactly one seam (**PriceProvider**) and one p
 (`price_overrides`), so the planner skeleton is fully buildable and testable before the
 pipeline is sharpened.
 
+### Research & financial-analysis lens — sister spec
+
+Reqs 2 (instrument discovery) and 3 (company/instrument research) — plus the deferred
+financial-analysis layers (fundamentals, filings, metrics) — are specced separately so this
+master stays about the planner. The framing that makes it cohere: the research lens is the
+**candidate-universe + evidence producer** for the planner: built top-down as *industry → key
+players → deep research → explicit approval*. Approved candidates are promoted into versioned
+planner strategy state; discovery never silently changes the buyable universe. On the budget side,
+the active ingestion slice produces reconciled `historical_surplus` evidence; a later composition
+layer turns that into planner-ready `deployable_capital`:
+
+→ **[finance-research/spec.md](../../../docs/requests/finance-research/spec.md)** (open questions
+R1–R15 to sharpen as we build).
+
+Like the planner, the qualitative lens is fully buildable today on agent + persistence; every
+quantitative dependency (metrics via `fin_metrics`, fundamentals via FMP, filings via edgartools)
+sits behind a deferred seam.
+
 ---
 
 ## Working intent
