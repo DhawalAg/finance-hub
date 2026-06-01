@@ -21,7 +21,7 @@ The four specs separate user commitments and engineering ownership:
 | [Finance ingestion](./ingestion/spec.md) | Statement import, canonical budget facts, reconciliation, historical-surplus evidence | Reconciled budget evidence | Finalized Slice 1 contract |
 | [Finance research](./research/spec.md) | Theme discovery, instrument research, cited evidence, candidate review | Approved research candidates + cited markdown / static-HTML readouts | Sharpening decisions recorded |
 | [Finance strategy](./strategy/spec.md) | Explicit promotion, versioned strategy, holdings input, capital composition boundary, deterministic deployment planning | Reviewable deployment plan | Extraction + sharpening pending |
-| [Finance market data](./market-data/spec.md) | Price-provider seam, price persistence, metrics, deferred provider activation | Grounded prices and quantitative inputs | Scaffold migration + sharpening pending |
+| [Finance market data](./market-data/spec.md) | Shared market-data subsystem, split into [acquisition](./market-data/acquisition.md) (price-provider seam, persistence, provider ownership) + [analytics](./market-data/analytics.md) (metrics, aggregates, analysis surfaces) | Grounded prices and quantitative inputs | Acquisition active (build line open); analytics design-ahead |
 
 ## Boundary Decisions
 
