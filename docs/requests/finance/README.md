@@ -18,10 +18,10 @@ The four specs separate user commitments and engineering ownership:
 
 | Spec | Owns | Produces | Status |
 |---|---|---|---|
-| [Finance ingestion](../finance-ingestion/spec.md) | Statement import, canonical budget facts, reconciliation, historical-surplus evidence | Reconciled budget evidence | Finalized Slice 1 contract on `finance-ingestion-spec` (`55b58a9`); merge/rebase pending in this worktree |
-| [Finance research](../finance-research/spec.md) | Theme discovery, instrument research, cited evidence, candidate review | Approved research candidates + cited markdown / static-HTML readouts | Active sharpening pass |
-| [Finance strategy](../finance-strategy/spec.md) | Explicit promotion, versioned strategy, holdings input, capital composition boundary, deterministic deployment planning | Reviewable deployment plan | Extraction + sharpening pending |
-| [Finance market data](../finance-market-data/spec.md) | Price-provider seam, price persistence, metrics, deferred provider activation | Grounded prices and quantitative inputs | Scaffold migration + sharpening pending |
+| [Finance ingestion](./ingestion/spec.md) | Statement import, canonical budget facts, reconciliation, historical-surplus evidence | Reconciled budget evidence | Finalized Slice 1 contract |
+| [Finance research](./research/spec.md) | Theme discovery, instrument research, cited evidence, candidate review | Approved research candidates + cited markdown / static-HTML readouts | Sharpening decisions recorded |
+| [Finance strategy](./strategy/spec.md) | Explicit promotion, versioned strategy, holdings input, capital composition boundary, deterministic deployment planning | Reviewable deployment plan | Extraction + sharpening pending |
+| [Finance market data](./market-data/spec.md) | Price-provider seam, price persistence, metrics, deferred provider activation | Grounded prices and quantitative inputs | Scaffold migration + sharpening pending |
 
 ## Boundary Decisions
 
@@ -69,5 +69,5 @@ Keep each layer independently evolvable without building a generalized platform 
 
 The files under [`notes/finance-corpus/00-inbox`](../../../notes/finance-corpus/00-inbox/) remain
 working notes, decision history, and source material. They are not the final implementation
-contracts. As each spec is sharpened, durable decisions move into the corresponding
-`docs/requests/finance-*` document.
+contracts. As each spec is sharpened, durable decisions move into the corresponding document under
+`docs/requests/finance/`.

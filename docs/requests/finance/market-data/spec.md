@@ -6,9 +6,9 @@
 This is the durable destination for the shared market-data contract. The existing working scaffold,
 decision history, and provider comparison remain in:
 
-- [`data-pipeline-spec.md`](../../../notes/finance-corpus/00-inbox/data-pipeline-spec.md)
-- [`data-pipeline-answers.md`](../../../notes/finance-corpus/00-inbox/data-pipeline-answers.md)
-- [`data-source-comparison.md`](../../../notes/finance-corpus/00-inbox/data-source-comparison.md)
+- [`data-pipeline-spec.md`](../../../../notes/finance-corpus/00-inbox/data-pipeline-spec.md)
+- [`data-pipeline-answers.md`](../../../../notes/finance-corpus/00-inbox/data-pipeline-answers.md)
+- [`data-source-comparison.md`](../../../../notes/finance-corpus/00-inbox/data-source-comparison.md)
 
 ## Responsibility
 
@@ -19,7 +19,7 @@ This spec will define the narrow shared subsystem that:
 - exposes provider seams so vendor decisions remain reversible;
 - supports research quantitative fields without making research depend on paid providers;
 - supplies `fin_price_bars` to a later analytics slice for event-response metrics / simulations when
-  [research event occurrences](../finance-research/spec.md) are active;
+  [research event occurrences](../research/spec.md) are active;
 - owns provider-specific operational logging and retry policy when each provider is activated.
 
 The first implementation slice remains intentionally narrow: current prices behind a
@@ -36,7 +36,7 @@ stable provider seams rather than vendor-specific APIs.
 Start with a free `PriceProvider`. Revisit the implementation when scheduled snapshot errors or empty
 results exceed approximately 10% over a rolling two-week window, or when reporting / analytics needs
 justify cleaner historical coverage earlier. Add other providers only when a named workflow fires a
-trigger recorded in the [research provider-activation block](../finance-research/spec.md): repeatable
+trigger recorded in the [research provider-activation block](../research/spec.md): repeatable
 filing-grounded extraction, earnings-calendar automation, analyst estimates, intraday backtesting,
 real-time news / sentiment, or filing surveillance at scale.
 

@@ -11,31 +11,30 @@ instrument research)**, and is the home for the deferred **financial-analysis** 
 (fundamentals, filings, metrics).
 
 It is specced apart from
-[requirements-dump.md](../../../notes/finance-corpus/00-inbox/requirements-dump.md) (planner source
-material) and the [market-data scaffold](../finance-market-data/spec.md) so each stays
+[requirements-dump.md](../../../../notes/finance-corpus/00-inbox/requirements-dump.md) (planner source
+material) and the [market-data scaffold](../market-data/spec.md) so each stays
 single-purpose. Like the planner, this lens
 is **fully buildable and useful today on agent + persistence alone** — every quantitative dependency
 (prices, metrics, fundamentals, filings) sits behind a seam that can stay deferred.
 
 > Companion docs:
-> - [requirements-dump.md](../../../notes/finance-corpus/00-inbox/requirements-dump.md) — the
+> - [requirements-dump.md](../../../../notes/finance-corpus/00-inbox/requirements-dump.md) — the
 >   2026-05-28 sharpening pass (headless tool
 >   registry, the **sleeve**, the agent/tool reframe, the plugin seams). This lens produces research
 >   candidates + evidence; a later explicit promotion snapshots approved research into planner-owned
 >   sleeves.
-> - [data-pipeline-spec.md](../../../notes/finance-corpus/00-inbox/data-pipeline-spec.md) +
->   [data-pipeline-answers.md](../../../notes/finance-corpus/00-inbox/data-pipeline-answers.md)
+> - [data-pipeline-spec.md](../../../../notes/finance-corpus/00-inbox/data-pipeline-spec.md) +
+>   [data-pipeline-answers.md](../../../../notes/finance-corpus/00-inbox/data-pipeline-answers.md)
 >   — the price/metrics subsystem. This lens **reads** `fin_metrics` / `fin_price_bars`; it does not
 >   compute them.
-> - [data-source-comparison.md](../../../notes/finance-corpus/00-inbox/data-source-comparison.md) —
+> - [data-source-comparison.md](../../../../notes/finance-corpus/00-inbox/data-source-comparison.md) —
 >   the provider decision this lens
 >   activates: **FMP** (`FundamentalsProvider`/`EarningsProvider`/`EstimatesProvider`, screening-grade)
 >   + **edgartools** (`FilingsProvider`, free, decision-grade ground truth).
-> - [finance-ingestion spec](../finance-ingestion/spec.md) — the
+> - [finance-ingestion spec](../ingestion/spec.md) — the
 >   active budget slice, the *other* producer feeding the planner. This spec mirrors its conventions
 >   (pure-core + thin `@tool` wrapper, `fin_*` tables, finance-owned migrations,
->   north-star provenance). **Note:** this worktree must merge/rebase `finance-ingestion-spec`
->   (`55b58a9`) before implementation so the linked contract exists locally.
+>   north-star provenance).
 
 ---
 
@@ -99,7 +98,7 @@ plan_deployment(deployable_capital, cadence)
           prices                ← data pipeline (PriceProvider)
 ```
 
-The budget lens (`docs/requests/finance-ingestion`) produces reconciled historical-surplus evidence
+The budget lens (`docs/requests/finance/ingestion`) produces reconciled historical-surplus evidence
 that a later capital-composition layer can turn into planner-ready capital. **This lens is the
 investing-side upstream workflow:** it produces themes, candidate instruments, cited reasoning, and a
 user-reviewed promotion into planner strategy state.
@@ -259,7 +258,7 @@ build now. The qualitative lens (§4–§6) ships first and stands alone; each q
 into a slot that already exists in `instrument_brief` / `theme_brief`.
 
 1. **MetricsProvider (the analytics layer)** — `fin_metrics` from
-   [data-pipeline-answers §D](../../../notes/finance-corpus/00-inbox/data-pipeline-answers.md) (returns,
+   [data-pipeline-answers §D](../../../../notes/finance-corpus/00-inbox/data-pipeline-answers.md) (returns,
    vol, drawdown, momentum, drift over
    the `fin_price_bars` series, `adj_close`-based). The research lens **reads** these to ground the
    "financial analysis" of a theme's players; it never computes them (the snapshot tool does). Until
@@ -488,7 +487,7 @@ fin_strategy_instruments
 
 | Date | Block | Decision | Consequence |
 |---|---|---|---|
-| 2026-05-31 | R1, R11, R12 — research state vs. planner strategy state | Separate research themes / candidate review from planner-owned, minimally versioned strategy state. Require explicit user-confirmed promotion. | Keep research tables focused on exploration and evidence. Sharpen planner tables and `promote_to_strategy(...)` in the [strategy spec](../finance-strategy/spec.md). |
+| 2026-05-31 | R1, R11, R12 — research state vs. planner strategy state | Separate research themes / candidate review from planner-owned, minimally versioned strategy state. Require explicit user-confirmed promotion. | Keep research tables focused on exploration and evidence. Sharpen planner tables and `promote_to_strategy(...)` in the [strategy spec](../strategy/spec.md). |
 | 2026-05-31 | R15 — first user-visible artifact | Start with a cited `theme_brief`. Export canonical markdown and derived static HTML readouts from the same grounded model + thesis note. | Build one portable research artifact before dashboards, screeners, generalized reports, or ticker-level briefs. |
 | 2026-05-31 | R3, R14 — theme taxonomy and instrument model | Use free-form hierarchical research themes and a ticker-centric US-listed USD `stock | etf` reference model in v1. | Preserve extension points, but defer external taxonomy enforcement and securities-master complexity until a demonstrated workflow needs them. |
 | 2026-05-31 | R10, R13 — provenance and upkeep | Store reusable finance-owned sources, link them to themes / instruments, cite stable source IDs from markdown, and surface explicit review reminders. Keep ad hoc search results ephemeral unless intentionally promoted. | Build a maintainable evidence trail without a crawler, knowledge graph, or structured claim extraction. |

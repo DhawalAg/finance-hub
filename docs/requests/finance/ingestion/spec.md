@@ -629,9 +629,9 @@ positions, brokerage cash, source/as-of provenance, share and price precision, a
 
 Useful background remains in:
 
-- [`notes/finance-corpus/00-inbox/data-pipeline-spec.md`](../../../notes/finance-corpus/00-inbox/data-pipeline-spec.md)
-- [`notes/finance-corpus/00-inbox/data-pipeline-answers.md`](../../../notes/finance-corpus/00-inbox/data-pipeline-answers.md)
-- [`notes/finance-corpus/00-inbox/requirements-dump.md`](../../../notes/finance-corpus/00-inbox/requirements-dump.md)
+- [`notes/finance-corpus/00-inbox/data-pipeline-spec.md`](../../../../notes/finance-corpus/00-inbox/data-pipeline-spec.md)
+- [`notes/finance-corpus/00-inbox/data-pipeline-answers.md`](../../../../notes/finance-corpus/00-inbox/data-pipeline-answers.md)
+- [`notes/finance-corpus/00-inbox/requirements-dump.md`](../../../../notes/finance-corpus/00-inbox/requirements-dump.md)
 
 Reference parsing logic remains in `../finance-hub/scripts/import_chase.py` and
 `../finance-hub/scripts/import_fidelity.py`. Reuse parsing ideas; do not inherit the Beancount
