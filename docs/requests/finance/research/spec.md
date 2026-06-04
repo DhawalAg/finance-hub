@@ -1,6 +1,6 @@
 # Finance Research Lens — Working Spec
 
-Last updated: 2026-05-31
+Last updated: 2026-06-04
 Status: scaffold for a block-by-block sharpening pass — the open questions (R1–R15) are the agenda
 
 This is the **research lens** of the finance hub: the workflow for going **top-down through
@@ -82,7 +82,7 @@ NLP — the same way the budget lens has no PDF parser.
 | "Store where that thesis lives + its sources" | **Tool** | note path + `fin_research_sources` |
 | "When does NVDA report next?" | **Tool** (agent-entered now / FMP later) | `fin_events` row |
 | "Is this 10-K number right?" | **Tool** (edgartools, deferred) | `FilingsProvider` |
-| "What's the 3-month return / drift?" | **Tool** (data pipeline, deferred) | `fin_metrics` |
+| "What's the 3-month return / drift?" | **Tool** (market-data analytics, deferred) | `fin_metrics` |
 
 ---
 
@@ -95,7 +95,7 @@ plan_deployment(deployable_capital, cadence)
   reads:  deployable_capital    ← later composition over BUDGET evidence
           approved strategy     ← explicit promotion from RESEARCH candidates
           holdings              ← later holdings slice
-          prices                ← data pipeline (PriceProvider)
+          prices                ← market data (`finance.prices(...)` PriceEnvelope)
 ```
 
 The budget lens (`docs/requests/finance/ingestion`) produces reconciled historical-surplus evidence
@@ -246,7 +246,7 @@ All `finance.*`, co-located in `hubs/finance/`, pure helpers in submodules, `@to
 | Tool | Seam | Provider | Trigger |
 |---|---|---|---|
 | `finance.fundamentals` | `FundamentalsProvider` / `FilingsProvider` | FMP (screening) + edgartools (ground truth) | research lens activates a thesis needing financials |
-| `finance.metrics` | reads `fin_metrics` | data pipeline (snapshot slice) | price-bar series exists |
+| `finance.metrics` | reads `fin_metrics` | market-data analytics (snapshot slice) | price-bar series exists |
 | `finance.earnings_calendar` | `EarningsProvider` | FMP | yfinance earnings-date unreliability bites (corpus B2 #2) |
 
 ---
@@ -260,7 +260,7 @@ into a slot that already exists in `instrument_brief` / `theme_brief`.
 1. **MetricsProvider (the analytics layer)** — `fin_metrics` from
    [data-pipeline-answers §D](../../../../notes/finance-corpus/00-inbox/data-pipeline-answers.md) (returns,
    vol, drawdown, momentum, drift over
-   the `fin_price_bars` series, `adj_close`-based). The research lens **reads** these to ground the
+   the daily `fin_price_bars` series, `adj_close`-based). The research lens **reads** these to ground the
    "financial analysis" of a theme's players; it never computes them (the snapshot tool does). Until
    the snapshot slice lands, the `metrics` field is absent and `quantitative_availability.metrics`
    explains why — the brief degrades to qualitative (R7).
@@ -275,10 +275,10 @@ into a slot that already exists in `instrument_brief` / `theme_brief`.
 4. **EarningsProvider (FMP)** — reliable earnings dates to replace agent-entered / unreliable yfinance
    dates.
 
-**Activation policy:** Block 10 defines the trigger gates. Research consumes provider seams; adapter
-selection, secrets, operational logging, retry policy, and cache policy belong to the market-data
-layer. The planner consumes `PriceProvider` and remains unaware of whether its implementation is
-yfinance or a later replacement.
+**Activation policy:** Block 10 defines the trigger gates. Research consumes market-data read seams;
+adapter selection, secrets, operational logging, retry policy, and cache policy belong to the
+market-data layer. The planner consumes `finance.prices(...)` price envelopes and remains unaware of
+whether daily bars came from yfinance or a later replacement.
 
 **Failure handling stays behind each deferred provider seam:** do not generalize the budget slice's
 `fin_ingest_issues` inbox into a universal error table now. When a provider is activated, define its
@@ -384,7 +384,7 @@ CREATE TABLE fin_events (                        -- event occurrences (req #3 "w
 );
 CREATE INDEX idx_fin_events_upcoming
   ON fin_events(status, event_date);
--- Deferred (owned by the data pipeline): fin_price_bars, fin_metrics, and a fin_fundamentals cache.
+-- Deferred / separately owned by market data: fin_price_bars, fin_metrics, and a fin_fundamentals cache.
 ```
 
 Notes:
@@ -860,9 +860,9 @@ justified by recurring workflow value.
 2. **Keep provider implementation ownership in the market-data layer.** Research declares consumer
    requirements and reads stable interfaces. Market-data owns adapters, configuration, secrets,
    caching, retry behavior, and operational logging.
-3. **Use a free `PriceProvider` as the first market-data implementation.** The planner and research
-   read the interface, not a yfinance-specific API. A later provider switch must not require planner
-   changes.
+3. **Use a free daily-bar `PriceProvider` as the first market-data implementation.** The planner and
+   research read `finance.prices(...)` / metrics, not a yfinance-specific API. A later provider switch
+   must not require planner changes.
 4. **Activate `edgartools` when an active thesis needs repeatable filing or XBRL-grounded financial
    extraction that manual cited reading cannot reasonably cover.** Treat SEC filings as the
    fundamentals source of record. Even though the library is free, activation still requires a small
@@ -926,7 +926,8 @@ review (per the corpus pacing rule).
 - Every thesis claim cites a source the tools can produce (`fin_research_sources`, a filing, a metric).
 - The agent authors prose in the vault; tools persist structure + provenance. Keep imported data,
   generated analysis, and agent-authored thesis cleanly separated (corpus principle).
-- Quantitative fields in a brief come from `fin_metrics` / `fin_price_bars` / a provider — never freehand.
+- Quantitative fields in a brief come from `fin_metrics` / `fin_price_bars` / price envelopes /
+  provider-backed seams — never freehand.
 
 **Ask first:**
 - Activating a paid provider (FMP) or adding a dependency (edgartools, FMP client) — confirm + a

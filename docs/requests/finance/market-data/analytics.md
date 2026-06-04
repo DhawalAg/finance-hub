@@ -1,10 +1,10 @@
 # Finance Market Data — Analytics Spec
 
 **Status:** Design-ahead; fully build-gated behind the acquisition build line
-**Updated:** 2026-05-31
+**Updated:** 2026-06-04
 **Home hub:** `hubs/finance/`
 
-The analytics half of the [market-data subsystem](./spec.md): turn the stored price facts into derived
+The analytics half of the [market-data subsystem](./spec.md): turn the stored daily bars into derived
 metrics, portfolio/theme aggregates, cross-sectional screens, event-response measures, and simulation
 (L2–L6). This spec is a **map, not a build list** — every layer here is deferred until a real workflow
 triggers it, and the first one cannot start until the [acquisition](./acquisition.md) build line (its
@@ -12,9 +12,9 @@ triggers it, and the first one cannot start until the [acquisition](./acquisitio
 
 > **What "design-ahead" buys.** Each layer below slots into a slot that already exists in its consumer:
 > the research `instrument_brief` / `theme_brief` carry optional `metrics` / `fundamentals` slots with
-> availability metadata ([research §9](../research/spec.md)); the planner reads a `prices` seam. When a
-> layer activates, it *fills a slot* — it does not reshape its consumer. That is the whole point of
-> writing this before building it.
+> availability metadata ([research §9](../research/spec.md)); the planner reads `PriceEnvelope`s from
+> `finance.prices(...)`. When a layer activates, it *fills a slot* — it does not reshape its consumer.
+> That is the whole point of writing this before building it.
 
 ---
 
@@ -29,8 +29,8 @@ This spec owns:
   and the rules that keep them composable;
 - the **runtime & dependency boundary** (§4) — the heavy scientific stack as an optional extra.
 
-It does **not** own price acquisition, the `close`/`adj_close` decision, or provider adapters (those
-are [acquisition](./acquisition.md)); strategy/holdings ([strategy](../strategy/spec.md)); or event
+It does **not** own daily-bar acquisition, the `close`/`adj_close` decision, or provider adapters
+(those are [acquisition](./acquisition.md)); strategy/holdings ([strategy](../strategy/spec.md)); or event
 *occurrences* — those are stored by [research](../research/spec.md)'s `fin_events`; this spec only
 *joins* them to bars (L5).
 
@@ -227,7 +227,7 @@ persist/return), mirroring the ingestion slice.
 ## 7. Boundaries
 
 **Always:**
-- Every metric a consumer shows traces to `fin_price_bars` / `fin_metrics` / a provider response —
+- Every metric a consumer shows traces to `fin_price_bars` / `fin_metrics` / a price envelope —
   never model freehand.
 - Analysis surfaces read the stored tables; only the acquisition L0 adapter touches a provider.
 - Returns use `adj_close`; valuation/share-count uses `close`.

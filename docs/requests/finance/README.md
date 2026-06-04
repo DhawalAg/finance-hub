@@ -1,7 +1,7 @@
 # Finance Hub — Spec Map
 
 **Status:** Working architecture map
-**Updated:** 2026-05-31
+**Updated:** 2026-06-04
 
 This is the durable map for the finance-hub specification set. The final deliverable is this
 overview plus four implementation specs under `docs/requests/`.
@@ -11,7 +11,7 @@ overview plus four implementation specs under `docs/requests/`.
 ```text
 INGESTION ──▶ historical-surplus evidence ──▶ capital composition ┐
 RESEARCH ───▶ approved candidates ──────────▶ versioned strategy ├──▶ deployment plan
-MARKET DATA ▶ prices + metrics ───────────────────────────────────┘
+MARKET DATA ▶ daily bars + price envelopes + metrics ─────────────┘
 ```
 
 The four specs separate user commitments and engineering ownership:
@@ -21,7 +21,7 @@ The four specs separate user commitments and engineering ownership:
 | [Finance ingestion](./ingestion/spec.md) | Statement import, canonical budget facts, reconciliation, historical-surplus evidence | Reconciled budget evidence | Finalized Slice 1 contract |
 | [Finance research](./research/spec.md) | Theme discovery, instrument research, cited evidence, candidate review | Approved research candidates + cited markdown / static-HTML readouts | Sharpening decisions recorded |
 | [Finance strategy](./strategy/spec.md) | Explicit promotion, versioned strategy, holdings input, capital composition boundary, deterministic deployment planning | Reviewable deployment plan | Extraction + sharpening pending |
-| [Finance market data](./market-data/spec.md) | Shared market-data subsystem, split into [acquisition](./market-data/acquisition.md) (price-provider seam, persistence, provider ownership) + [analytics](./market-data/analytics.md) (metrics, aggregates, analysis surfaces) | Grounded prices and quantitative inputs | Acquisition active (build line open); analytics design-ahead |
+| [Finance market data](./market-data/spec.md) | Shared market-data subsystem, split into [acquisition](./market-data/acquisition.md) (daily-bar provider seam, persistence, price-envelope reads, provider ownership) + [analytics](./market-data/analytics.md) (metrics, aggregates, analysis surfaces) | Grounded daily bars, price envelopes, and quantitative inputs | Acquisition active (build line drawn); analytics design-ahead |
 
 ## Boundary Decisions
 
@@ -33,7 +33,7 @@ The four specs separate user commitments and engineering ownership:
    `historical_surplus` evidence. A later capital-composition step combines evidence with liquidity,
    reserves, obligations, and explicit overrides.
 4. **Market data is a shared subsystem, not a separate user workflow.** Research and planning consume
-   grounded prices / metrics through narrow provider seams.
+   grounded price envelopes / metrics through narrow market-data seams.
 5. **The agent owns judgment; tools own durable facts and deterministic arithmetic.** No tool should
    turn prose or agent confidence into an allocation implicitly.
 6. **Research readouts have one source of truth.** Markdown is the canonical portable artifact.
@@ -55,10 +55,10 @@ Keep each layer independently evolvable without building a generalized platform 
 - Each spec owns its domain tables and behavior. Cross-layer writes happen only through explicit
   handoff tools such as `finance.promote_to_strategy(...)`.
 - Shared concepts stay deliberately small. For example, `fin_instruments` is a shared reference
-  contract; research annotates tickers, market data prices them, and strategy snapshots approved
-  selections.
+  contract; research annotates tickers, market data stores daily bars / price envelopes for them, and
+  strategy snapshots approved selections.
 - Layer boundaries use narrow, versionable inputs and outputs: reconciled budget evidence, approved
-  candidates, grounded prices / metrics, and immutable strategy versions.
+  candidates, grounded price envelopes / metrics, and immutable strategy versions.
 - Add fields and tables when a demonstrated workflow needs them. Avoid speculative abstractions,
   vendor-shaped core models, and duplicated state.
 - Put provider-specific logic behind adapters. Persist provenance so a later implementation can

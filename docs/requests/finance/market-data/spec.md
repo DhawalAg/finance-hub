@@ -1,16 +1,17 @@
 # Finance Market Data — Subsystem Overview
 
 **Status:** Split into two sub-specs; acquisition is the active build, analytics is design-ahead
-**Updated:** 2026-05-31
+**Updated:** 2026-06-04
 **Home hub:** `hubs/finance/`
 
 This is the index for the market-data subsystem. It does two distinct jobs, now specced separately so
 the active contract stays lean while the deferred half evolves on its own:
 
 - **[Acquisition](./acquisition.md)** — turn provider responses into grounded, provenance-stamped,
-  point-in-time price facts (L0–L1). **The active build.** Owns the `PriceProvider` seam,
-  `fin_price_bars`, caching, retries, secrets, and operational logging — and is **where the build-now
-  line is drawn** (lead decision, now drawn: line at B, reviewed at A).
+  daily OHLCV observations (L0–L1). **The active build.** Owns the `PriceProvider.fetch_daily_bars`
+  seam, `finance.prices(...)` price-envelope reads, `fin_price_bars`, caching, retries, secrets, and
+  operational logging — and is **where the build-now line is drawn** (lead decision, now drawn: line
+  at B, reviewed at A).
 - **[Analytics](./analytics.md)** — turn those stored facts into derived metrics, portfolio/theme
   aggregates, cross-sectional screens, event-response measures, and simulation (L2–L6). **Design-ahead
   and fully build-gated.** Owns `fin_metrics`, the metric taxonomy, and the scripts / notebooks /
@@ -21,6 +22,7 @@ Decision history and the provider comparison remain in:
 - [`data-pipeline-spec.md`](../../../../notes/finance-corpus/00-inbox/data-pipeline-spec.md)
 - [`data-pipeline-answers.md`](../../../../notes/finance-corpus/00-inbox/data-pipeline-answers.md)
 - [`data-source-comparison.md`](../../../../notes/finance-corpus/00-inbox/data-source-comparison.md)
+- [`provider-comparison.md`](./provider-comparison.md)
 
 ---
 
@@ -47,15 +49,15 @@ sub-specs detail their own layers and do not redraw it.
  L3  Aggregated metrics           sleeve & portfolio rollups, drift, concentration  ── deferred    │
  L2  Derived metrics              returns, vol, drawdown, momentum (per instrument) ── deferred    ┘
  ── seam: fin_price_bars ──────────────────────────────────────────────────────────────────────────
- L1  Stored observations          fin_price_bars (immutable close + vintaged adj)   ── active      ┐ ACQUISITION
- L0  Providers (acquisition)      PriceProvider → yfinance | FMP | edgartools | …   ── active      ┘ (acquisition.md)
+ L1  Stored observations          fin_price_bars (daily OHLCV + refreshed adj)      ── active      ┐ ACQUISITION
+ L0  Providers (acquisition)      PriceProvider.fetch_daily_bars → yfinance | FMP   ── active      ┘ (acquisition.md)
         ▲ external world (Yahoo, FMP, SEC EDGAR, …)
 ```
 
 | L | Layer | Owns | Reads | Spec | Status |
 |---|---|---|---|---|---|
 | **L0** | Providers | adapters, config, secrets, cache, retry, fetch log, provenance | external APIs | acquisition | **active** |
-| **L1** | Stored observations | `fin_price_bars` (+ later a fundamentals / corp-actions cache) | L0 | acquisition | **active** |
+| **L1** | Stored observations | `fin_price_bars` daily OHLCV (+ later a fundamentals / corp-actions cache) | L0 | acquisition | **active** |
 | **L2** | Derived metrics | `fin_metrics` per-instrument: return, vol, drawdown, momentum | L1 | analytics | deferred |
 | **L3** | Aggregated metrics | sleeve / theme / portfolio rollups | L1, L2 + holdings/strategy | analytics | deferred |
 | **L4** | Cross-sectional | screens, rankings, peer comparisons within a theme | L1, L2 | analytics | deferred |
@@ -68,8 +70,8 @@ sub-specs detail their own layers and do not redraw it.
 
 `fin_price_bars` is the contract. **Acquisition writes it; analytics reads it.** Reads go strictly
 downward — analytics never reaches back into a provider, and acquisition never depends on a metric.
-The single most load-bearing modelling decision — store raw **`close`** as the immutable fact and
-carry vendor **`adj_close`** vintage-stamped for return math — spans both halves; its **canonical
+The single most load-bearing modelling decision — store raw **OHLCV** with `close` as the planner
+anchor and carry vendor **`adj_close`** for return math — spans both halves; its **canonical
 statement lives in the [acquisition spec](./acquisition.md)** (it is stored there) and analytics
 consumes it. No decision is duplicated across the two docs.
 

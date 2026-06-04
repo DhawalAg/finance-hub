@@ -621,11 +621,11 @@ remaining tools.
 - Full deployable-capital composition.
 - Dedicated UI.
 
-### Slice 2: Holdings And Prices
+### Slice 2: Holdings And Market-Data Reads
 
 Slice 2 gets its own sharpening pass before implementation. It must settle holdings snapshots, sold
-positions, brokerage cash, source/as-of provenance, share and price precision, and the existing
-`PriceProvider` design.
+positions, brokerage cash, source/as-of provenance, share precision, and the market-data
+daily-bar / price-envelope read contract.
 
 Useful background remains in:
 
