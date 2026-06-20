@@ -2,7 +2,7 @@
 
 **Status:** Implementation-ready
 **Updated:** 2026-05-31
-**Home hub:** `hubs/finance/`
+**Home package:** `src/finance_hub/`
 
 This is the authoritative implementation contract for Slice 1. Decision history lives in
 [`working-doc.md`](./working-doc.md). Holdings, prices, and scheduled acquisition remain deferred.
@@ -56,13 +56,13 @@ Single user. The CLI and MCP-exposed agent are the frontends; there is no separa
 
 - Tools are plain `@tool`-decorated Python functions under the `finance.` namespace. The existing
   registry exposes them over CLI and MCP.
-- Finance owns its `fin_*` tables in `hubs/finance/store.py`, reusing `core.store.connect()` and the
-  shared `hub.db`.
+- Finance owns its `fin_*` tables under `src/finance_hub/store/`, using finance-owned migration
+  helpers.
 - Pure transformations live outside registered wrappers: money parsing, adapter normalization,
   categorization, flow typing, candidate matching, reconciliation, coverage assessment, and summary
   arithmetic.
 - Thin wrappers load state, call pure functions, persist results, and return structured responses.
-- `core.store.connect()` enables `PRAGMA foreign_keys = ON` for every SQLite connection.
+- Finance store helpers enable `PRAGMA foreign_keys = ON` for every SQLite connection.
 
 ### Acquisition Strategy
 
@@ -289,7 +289,8 @@ CREATE INDEX fin_source_records_transaction
 `init_finance()` creates `fin_schema_migrations` if needed, then runs missing finance migrations in
 order inside a transaction. Record each version only after success.
 
-Do not use database-global `PRAGMA user_version`: `hub.db` is shared by multiple hubs.
+Do not use database-global `PRAGMA user_version`; finance owns explicit migration state in
+`fin_schema_migrations`.
 
 ### Deletion Policy
 

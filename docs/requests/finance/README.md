@@ -6,6 +6,9 @@
 This is the durable map for the finance-hub specification set. The final deliverable is this
 overview plus four implementation specs under `docs/requests/`.
 
+The executable code now lives in the installable `src/finance_hub/` package. Specs, plans, TODOs,
+and design docs stay request-scoped under `docs/requests/finance/`.
+
 ## Product Flow
 
 ```text

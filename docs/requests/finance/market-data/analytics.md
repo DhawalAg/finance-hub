@@ -2,7 +2,7 @@
 
 **Status:** Design-ahead; fully build-gated behind the acquisition build line
 **Updated:** 2026-06-04
-**Home hub:** `hubs/finance/`
+**Home package:** `src/finance_hub/`
 
 The analytics half of the [market-data subsystem](./spec.md): turn the stored daily bars into derived
 metrics, portfolio/theme aggregates, cross-sectional screens, event-response measures, and simulation
@@ -124,7 +124,7 @@ non-overlapping job:
 
 | Surface | Job | Character | Examples |
 |---|---|---|---|
-| **Headless scripts / tools** | repeatable, deterministic computation | reproducible, no LLM, venv-runnable via bash | `hub run finance.snapshot`, `finance.metrics(ticker, window)`, a `scripts/finance/theme_screen.py` |
+| **Headless scripts / tools** | repeatable, deterministic computation | reproducible, no LLM, venv-runnable via bash | `finance run finance.snapshot`, `finance.metrics(ticker, window)`, a `scripts/finance/theme_screen.py` |
 | **Jupyter notebooks** | exploration, charting, hypothesis-forming | interactive, throwaway, read-only on stored data | "is compute drift widening?", correlation heatmaps, eyeballing a new metric before it's a tool |
 | **Dashboards** (later) | at-a-glance composed views | generated, replaceable, no hand-editing | a static HTML portfolio/theme readout |
 

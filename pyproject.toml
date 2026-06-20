@@ -1,7 +1,7 @@
 [project]
-name = "hub-hub"
+name = "finance-hub"
 version = "0.1.0"
-description = "Shared core + per-hub capabilities exposed as CLI and MCP tools (outreach, search, research, finance)."
+description = "Finance-focused agent tools exposed through CLI and MCP."
 requires-python = ">=3.10"
 dependencies = [
     "anthropic>=0.40",
@@ -9,13 +9,25 @@ dependencies = [
     "mcp>=1.2",
 ]
 
+[project.optional-dependencies]
+market-data = [
+    "yfinance>=0.2",
+]
+analysis = [
+    "numpy>=2",
+    "pandas>=2",
+]
+dev = [
+    "pytest>=8",
+]
+
 [project.scripts]
-hub = "cli:app"
+finance = "finance_hub.cli:app"
+finance-mcp = "finance_hub.mcp_server:main"
 
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools]
-py-modules = ["cli", "mcp_server"]
-packages = ["core", "hubs", "hubs.outreach", "hubs.search", "hubs.research", "hubs.finance"]
+[tool.setuptools.packages.find]
+where = ["src"]

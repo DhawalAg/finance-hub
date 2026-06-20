@@ -1,0 +1,1097 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Finance Hub Architecture Explainer</title>
+  <style>
+    :root {
+      --bg: #f5efe3;
+      --bg-strong: #efe5d1;
+      --surface: rgba(255, 252, 245, 0.88);
+      --surface-strong: #fffaf0;
+      --ink: #18231c;
+      --muted: #5f685e;
+      --line: rgba(24, 35, 28, 0.12);
+      --accent: #0f766e;
+      --accent-2: #b45309;
+      --accent-3: #1d4ed8;
+      --good: #166534;
+      --warn: #b45309;
+      --soft-red: #991b1b;
+      --shadow: 0 18px 48px rgba(43, 37, 18, 0.12);
+      --radius: 18px;
+      --radius-sm: 12px;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      --sans: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Palatino, Georgia, serif;
+      --sans-ui: "Avenir Next", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      font-family: var(--sans-ui);
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(15, 118, 110, 0.10), transparent 32%),
+        radial-gradient(circle at top right, rgba(180, 83, 9, 0.10), transparent 28%),
+        linear-gradient(180deg, #f9f5eb 0%, #f2eadb 100%);
+      line-height: 1.55;
+    }
+
+    a {
+      color: var(--accent-3);
+    }
+
+    .page {
+      width: min(1380px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 28px 0 48px;
+    }
+
+    .hero {
+      position: relative;
+      overflow: hidden;
+      background:
+        linear-gradient(135deg, rgba(15, 118, 110, 0.10), rgba(255, 250, 240, 0.85) 35%, rgba(180, 83, 9, 0.09)),
+        var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 28px;
+      box-shadow: var(--shadow);
+      padding: 32px;
+    }
+
+    .hero::after {
+      content: "";
+      position: absolute;
+      inset: auto -80px -120px auto;
+      width: 280px;
+      height: 280px;
+      background: radial-gradient(circle, rgba(15, 118, 110, 0.15), transparent 65%);
+      transform: rotate(18deg);
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      gap: 8px;
+      align-items: center;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(255, 250, 240, 0.85);
+      border: 1px solid rgba(15, 118, 110, 0.18);
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    h1, h2, h3 {
+      margin: 0;
+      line-height: 1.1;
+    }
+
+    h1 {
+      font-family: var(--sans);
+      font-size: clamp(2.4rem, 4vw, 4.2rem);
+      letter-spacing: -0.03em;
+      margin-top: 14px;
+      max-width: 12ch;
+    }
+
+    .hero p.lead {
+      font-size: 1.1rem;
+      max-width: 70ch;
+      color: #28332b;
+      margin: 16px 0 0;
+    }
+
+    .hero-grid {
+      display: grid;
+      grid-template-columns: 1.4fr 1fr;
+      gap: 22px;
+      margin-top: 28px;
+      position: relative;
+      z-index: 1;
+    }
+
+    .stat-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .stat {
+      background: rgba(255, 250, 240, 0.84);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 14px;
+    }
+
+    .stat strong {
+      display: block;
+      font-size: 1.65rem;
+      font-weight: 800;
+      margin-bottom: 4px;
+    }
+
+    .hero-note {
+      background: rgba(24, 35, 28, 0.92);
+      color: #f8f1e3;
+      border-radius: 18px;
+      padding: 18px 18px 16px;
+    }
+
+    .hero-note h2 {
+      font-size: 1rem;
+      margin-bottom: 10px;
+    }
+
+    .hero-note p,
+    .hero-note li {
+      color: rgba(248, 241, 227, 0.86);
+    }
+
+    .hero-note ul {
+      margin: 0;
+      padding-left: 18px;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 280px minmax(0, 1fr);
+      gap: 20px;
+      margin-top: 22px;
+      align-items: start;
+    }
+
+    .sidebar {
+      position: sticky;
+      top: 16px;
+      background: rgba(255, 250, 240, 0.8);
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      padding: 18px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(12px);
+    }
+
+    .sidebar h2 {
+      font-size: 0.95rem;
+      margin-bottom: 10px;
+      color: var(--accent);
+    }
+
+    .sidebar ol {
+      margin: 0 0 18px;
+      padding-left: 20px;
+    }
+
+    .sidebar li {
+      margin: 8px 0;
+      color: var(--muted);
+    }
+
+    .sidebar code {
+      font-family: var(--mono);
+      font-size: 0.9em;
+    }
+
+    .content {
+      display: grid;
+      gap: 18px;
+    }
+
+    section {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      padding: 24px;
+      box-shadow: var(--shadow);
+    }
+
+    section h2 {
+      font-family: var(--sans);
+      font-size: clamp(1.7rem, 2.2vw, 2.5rem);
+      letter-spacing: -0.02em;
+      margin-bottom: 8px;
+    }
+
+    section > p.section-intro {
+      color: var(--muted);
+      margin: 0 0 18px;
+      max-width: 74ch;
+    }
+
+    .badge-row,
+    .chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      background: rgba(255, 250, 240, 0.88);
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      font-size: 0.92rem;
+    }
+
+    .chip strong {
+      color: var(--ink);
+    }
+
+    .grid-2,
+    .grid-3 {
+      display: grid;
+      gap: 14px;
+    }
+
+    .grid-2 {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .grid-3 {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .card {
+      background: rgba(255, 250, 240, 0.84);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 16px;
+    }
+
+    .card h3 {
+      font-size: 1.05rem;
+      margin-bottom: 8px;
+    }
+
+    .card p,
+    .card li {
+      color: var(--muted);
+    }
+
+    .card ul {
+      margin: 0;
+      padding-left: 18px;
+    }
+
+    .status {
+      display: inline-block;
+      margin-top: 8px;
+      padding: 5px 9px;
+      border-radius: 999px;
+      font-size: 0.8rem;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+    }
+
+    .status.ready {
+      background: rgba(22, 101, 52, 0.12);
+      color: var(--good);
+    }
+
+    .status.active {
+      background: rgba(29, 78, 216, 0.12);
+      color: var(--accent-3);
+    }
+
+    .status.scaffold {
+      background: rgba(180, 83, 9, 0.14);
+      color: var(--warn);
+    }
+
+    .status.empty {
+      background: rgba(153, 27, 27, 0.12);
+      color: var(--soft-red);
+    }
+
+    .mono {
+      font-family: var(--mono);
+    }
+
+    .tree {
+      background: #181c18;
+      color: #ecf0e8;
+      border-radius: 18px;
+      padding: 18px;
+      font-family: var(--mono);
+      font-size: 0.92rem;
+      overflow-x: auto;
+      white-space: pre;
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.95rem;
+      background: rgba(255, 250, 240, 0.7);
+      border-radius: 14px;
+      overflow: hidden;
+    }
+
+    th, td {
+      text-align: left;
+      padding: 12px 10px;
+      vertical-align: top;
+      border-bottom: 1px solid var(--line);
+    }
+
+    th {
+      background: rgba(15, 118, 110, 0.08);
+      font-size: 0.82rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: #184642;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .svg-wrap {
+      background: linear-gradient(180deg, rgba(255, 250, 240, 0.94), rgba(248, 243, 232, 0.92));
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      padding: 14px;
+      overflow: auto;
+    }
+
+    .callout {
+      border-left: 4px solid var(--accent-2);
+      background: rgba(180, 83, 9, 0.08);
+      border-radius: 14px;
+      padding: 14px 16px;
+      color: #553a12;
+    }
+
+    .callout strong {
+      color: #6f430f;
+    }
+
+    .two-col-text {
+      columns: 2 280px;
+      column-gap: 24px;
+    }
+
+    .footnotes {
+      font-size: 0.92rem;
+      color: var(--muted);
+    }
+
+    .source-list {
+      margin: 0;
+      padding-left: 18px;
+    }
+
+    .source-list li {
+      margin: 8px 0;
+    }
+
+    @media (max-width: 1080px) {
+      .hero-grid,
+      .layout,
+      .grid-2,
+      .grid-3,
+      .stat-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .sidebar {
+        position: static;
+      }
+    }
+
+    @media (max-width: 720px) {
+      .page {
+        width: min(100% - 20px, 1380px);
+        padding-top: 12px;
+      }
+
+      .hero,
+      section {
+        padding: 18px;
+      }
+
+      h1 {
+        max-width: 100%;
+      }
+
+      table {
+        display: block;
+        overflow-x: auto;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">HTML Architecture Explainer</div>
+      <h1>Finance Hub Spec Map, Runtime Shape, and Capability Design</h1>
+      <p class="lead">
+        This page explains what the finance work in this repo currently is, how the files are organized,
+        how the specs translate into architecture, and what the <span class="mono">finance_hub</span>
+        package is intended to expose through the shared CLI and MCP runtime.
+      </p>
+      <div class="hero-grid">
+        <div class="stat-grid">
+          <div class="stat">
+            <strong>10</strong>
+            finance docs and notes actively shaping the package
+          </div>
+          <div class="stat">
+            <strong>4</strong>
+            top-level finance spec areas: ingestion, research, strategy, market data
+          </div>
+          <div class="stat">
+            <strong>0</strong>
+            finance tools registered in code today
+          </div>
+          <div class="stat">
+            <strong>2</strong>
+            simultaneous truths: rich architecture exists, runtime implementation does not yet
+          </div>
+        </div>
+        <aside class="hero-note">
+          <h2>Current read in one paragraph</h2>
+          <p>
+            The repo already has a strong finance design package. The center of gravity has moved from raw
+            notes into durable specs under <span class="mono">docs/requests/finance</span>, with market-data
+            acquisition marked as the active build line, ingestion slice 1 marked implementation-ready,
+            research partially sharpened, and strategy still mostly a scaffold. The runtime spine for tools
+            already exists globally, but finance has not yet been wired into it.
+          </p>
+        </aside>
+      </div>
+    </header>
+
+    <div class="layout">
+      <aside class="sidebar">
+        <h2>Sections</h2>
+        <ol>
+          <li><a href="#inventory">File inventory</a></li>
+          <li><a href="#state">What is real today</a></li>
+          <li><a href="#architecture">Spec to architecture</a></li>
+          <li><a href="#module-shape">Finance module shape</a></li>
+          <li><a href="#capabilities">Capability surface</a></li>
+          <li><a href="#runtime">How it will run</a></li>
+          <li><a href="#roadmap">What comes next</a></li>
+          <li><a href="#sources">Grounding</a></li>
+        </ol>
+        <div class="card">
+          <h3>Repo reality</h3>
+          <p>
+            <span class="mono">finance_hub.runtime.registry</span>, <span class="mono">finance_hub.cli</span>, and <span class="mono">finance_hub.mcp_server</span>
+            define the execution model. Finance registers thin
+            <span class="mono">@tool</span> wrappers there when implemented.
+          </p>
+        </div>
+      </aside>
+
+      <main class="content">
+        <section id="inventory">
+          <h2>1. File Inventory</h2>
+          <p class="section-intro">
+            The finance work is split cleanly between durable implementation contracts under
+            <span class="mono">docs/requests/finance</span> and earlier working notes under
+            <span class="mono">notes/finance-corpus/00-inbox</span>.
+          </p>
+          <div class="grid-2">
+            <div class="card">
+              <h3>Durable spec package</h3>
+              <div class="tree">docs/requests/finance/
+  README.md
+  ingestion/
+    spec.md
+    working-doc.md
+  market-data/
+    spec.md
+    acquisition.md
+    analytics.md
+    provider-comparison.md
+    provider-comparison.html
+  research/
+    spec.md
+  strategy/
+    spec.md</div>
+            </div>
+            <div class="card">
+              <h3>Earlier note corpus</h3>
+              <div class="tree">notes/finance-corpus/00-inbox/
+  requirements-dump.md
+  data-pipeline-spec.md
+  data-pipeline-answers.md
+  data-source-comparison.md
+  ticker-deep-dive-target-experience.md</div>
+            </div>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>File</th>
+                <th>Role</th>
+                <th>Current state</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><span class="mono">README.md</span></td>
+                <td>Finance package map and boundary summary</td>
+                <td>Top-level orientation doc; use this first</td>
+              </tr>
+              <tr>
+                <td><span class="mono">ingestion/spec.md</span></td>
+                <td>Statement-driven budget ingestion contract</td>
+                <td>Most implementation-ready part of finance</td>
+              </tr>
+              <tr>
+                <td><span class="mono">ingestion/working-doc.md</span></td>
+                <td>Decision ledger for ingestion</td>
+                <td>Explains why the spec looks the way it does</td>
+              </tr>
+              <tr>
+                <td><span class="mono">research/spec.md</span></td>
+                <td>Theme research, watchlists, notes, sources, events, readouts</td>
+                <td>Substantial spec, but still in sharpening mode</td>
+              </tr>
+              <tr>
+                <td><span class="mono">strategy/spec.md</span></td>
+                <td>Strategy versions, sleeves, promotion, deployment planning</td>
+                <td>Scaffold only; least developed durable spec</td>
+              </tr>
+              <tr>
+                <td><span class="mono">market-data/acquisition.md</span></td>
+                <td>Provider seam, daily bars, price envelopes, snapshot path</td>
+                <td>Active build line</td>
+              </tr>
+              <tr>
+                <td><span class="mono">market-data/analytics.md</span></td>
+                <td>Metrics, aggregates, comparisons, event response, simulation</td>
+                <td>Design-ahead only; build-gated</td>
+              </tr>
+              <tr>
+                <td><span class="mono">provider-comparison.*</span></td>
+                <td>Provider bakeoff and decision support</td>
+                <td>Newest spec sharpening work</td>
+              </tr>
+              <tr>
+                <td><span class="mono">requirements-dump.md</span></td>
+                <td>Original product framing and build-order reasoning</td>
+                <td>Still useful for intent; superseded by later docs where they differ</td>
+              </tr>
+              <tr>
+                <td><span class="mono">ticker-deep-dive-target-experience.md</span></td>
+                <td>Ghost requirements for instrument deep-dive output</td>
+                <td>Acts as a pressure test on research + metrics + fundamentals seams</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section id="state">
+          <h2>2. What Is Real Today</h2>
+          <p class="section-intro">
+            There are two parallel structures in the repo: an implemented finance tool runtime, and a largely
+            unimplemented finance domain that has been designed to plug into that runtime.
+          </p>
+          <div class="grid-3">
+            <div class="card">
+              <h3>Shared runtime exists</h3>
+              <ul>
+                <li><span class="mono">finance_hub.runtime.registry</span> registers tools once.</li>
+                <li><span class="mono">finance_hub.cli</span> exposes them as <span class="mono">finance run ...</span>.</li>
+                <li><span class="mono">finance_hub.mcp_server</span> exposes the same tool set to agents.</li>
+                <li>The runtime is installed as the <span class="mono">finance</span> and <span class="mono">finance-mcp</span> commands.</li>
+              </ul>
+              <span class="status ready">implemented</span>
+            </div>
+            <div class="card">
+              <h3>Finance architecture exists</h3>
+              <ul>
+                <li>Specs define tables, seams, build order, and tool contracts.</li>
+                <li>North-star rules around provenance are repeated consistently.</li>
+                <li>Cross-spec boundaries are surprisingly clean.</li>
+              </ul>
+              <span class="status active">well specced</span>
+            </div>
+            <div class="card">
+              <h3>Finance code does not yet exist</h3>
+              <ul>
+                <li><span class="mono">src/finance_hub/</span> now contains package placeholders.</li>
+                <li>No real finance ingestion, market-data, research, or strategy tools are implemented yet.</li>
+                <li>The finance CLI/MCP commands are wired to the placeholder registry.</li>
+              </ul>
+              <span class="status empty">runtime gap</span>
+            </div>
+          </div>
+          <div class="callout" style="margin-top: 16px;">
+            <strong>Important distinction:</strong> if you read only the docs, it feels like a package already
+            exists. If you read only the code, finance is still mostly scaffolding. The correct understanding is: the repo has
+            a designed finance subsystem waiting to be implemented on top of an already-existing CLI/MCP tool runtime.
+          </div>
+        </section>
+
+        <section id="architecture">
+          <h2>3. How the Specs Translate to Architecture</h2>
+          <p class="section-intro">
+            The finance design is not one monolith. It is a set of narrow subsystems that feed a future planner.
+            The architecture is intentionally layered so each slice can ship without forcing the others to exist.
+          </p>
+          <div class="svg-wrap">
+            <svg viewBox="0 0 1080 620" width="100%" role="img" aria-label="Finance architecture diagram">
+              <defs>
+                <linearGradient id="cardA" x1="0" x2="1">
+                  <stop offset="0%" stop-color="#d7f0eb"></stop>
+                  <stop offset="100%" stop-color="#f1faf8"></stop>
+                </linearGradient>
+                <linearGradient id="cardB" x1="0" x2="1">
+                  <stop offset="0%" stop-color="#f7e5c9"></stop>
+                  <stop offset="100%" stop-color="#fff8ee"></stop>
+                </linearGradient>
+                <linearGradient id="cardC" x1="0" x2="1">
+                  <stop offset="0%" stop-color="#dbe7ff"></stop>
+                  <stop offset="100%" stop-color="#f7f9ff"></stop>
+                </linearGradient>
+                <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+                  <path d="M0,0 L10,3 L0,6 Z" fill="#475569"></path>
+                </marker>
+              </defs>
+
+              <rect x="30" y="26" width="280" height="162" rx="18" fill="url(#cardB)" stroke="#d7c19a"></rect>
+              <text x="52" y="60" font-size="24" font-weight="700" fill="#6b3f11">Ingestion</text>
+              <text x="52" y="92" font-size="16" fill="#6b4d28">Imports statements and transaction evidence.</text>
+              <text x="52" y="118" font-size="16" fill="#6b4d28">Produces reconciled budget facts and</text>
+              <text x="52" y="140" font-size="16" fill="#6b4d28">confidence-gated historical surplus.</text>
+              <text x="52" y="170" font-size="14" fill="#8b5e2c">Slice 1 is implementation-ready.</text>
+
+              <rect x="30" y="228" width="280" height="182" rx="18" fill="url(#cardA)" stroke="#96c7bf"></rect>
+              <text x="52" y="262" font-size="24" font-weight="700" fill="#115e59">Research</text>
+              <text x="52" y="294" font-size="16" fill="#275853">Maps themes to instruments, sources,</text>
+              <text x="52" y="316" font-size="16" fill="#275853">events, notes, and generated briefs.</text>
+              <text x="52" y="342" font-size="16" fill="#275853">Produces candidates plus evidence,</text>
+              <text x="52" y="364" font-size="16" fill="#275853">not automatic strategy state.</text>
+              <text x="52" y="392" font-size="14" fill="#2f736a">Useful qualitatively before metrics exist.</text>
+
+              <rect x="30" y="448" width="280" height="138" rx="18" fill="url(#cardC)" stroke="#9db7f1"></rect>
+              <text x="52" y="482" font-size="24" font-weight="700" fill="#1d4ed8">Market Data</text>
+              <text x="52" y="514" font-size="16" fill="#2a4d95">Acquisition writes daily bars and price envelopes.</text>
+              <text x="52" y="538" font-size="16" fill="#2a4d95">Analytics later reads those bars for metrics.</text>
+              <text x="52" y="566" font-size="14" fill="#4668b2">Acquisition is the active build line.</text>
+
+              <rect x="420" y="120" width="250" height="118" rx="18" fill="#fff9ef" stroke="#d8c8a2"></rect>
+              <text x="444" y="154" font-size="22" font-weight="700" fill="#55411d">Capital composition</text>
+              <text x="444" y="182" font-size="15" fill="#6f5a34">Later layer that turns historical surplus</text>
+              <text x="444" y="204" font-size="15" fill="#6f5a34">into planner-ready capital.</text>
+
+              <rect x="420" y="276" width="250" height="118" rx="18" fill="#f0faf8" stroke="#9fcdc4"></rect>
+              <text x="444" y="310" font-size="22" font-weight="700" fill="#155e57">Strategy</text>
+              <text x="444" y="338" font-size="15" fill="#2d5d58">Explicit promotion from research.</text>
+              <text x="444" y="360" font-size="15" fill="#2d5d58">Owns immutable strategy versions and sleeves.</text>
+
+              <rect x="420" y="432" width="250" height="118" rx="18" fill="#eef3ff" stroke="#a9bced"></rect>
+              <text x="444" y="466" font-size="22" font-weight="700" fill="#1d4ed8">Holdings + prices</text>
+              <text x="444" y="494" font-size="15" fill="#32548d">Planner consumes market-data envelopes</text>
+              <text x="444" y="516" font-size="15" fill="#32548d">instead of raw vendor payloads.</text>
+
+              <rect x="778" y="212" width="262" height="182" rx="20" fill="#18231c" stroke="#0f766e"></rect>
+              <text x="804" y="252" font-size="28" font-weight="700" fill="#f4f1e8">Planner</text>
+              <text x="804" y="286" font-size="16" fill="#d5ddd4">Deterministic deployment planning over:</text>
+              <text x="804" y="314" font-size="16" fill="#d5ddd4">1. capital</text>
+              <text x="804" y="338" font-size="16" fill="#d5ddd4">2. strategy</text>
+              <text x="804" y="362" font-size="16" fill="#d5ddd4">3. holdings</text>
+              <text x="804" y="386" font-size="16" fill="#d5ddd4">4. grounded prices</text>
+
+              <line x1="310" y1="106" x2="420" y2="170" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)"></line>
+              <line x1="310" y1="320" x2="420" y2="334" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)"></line>
+              <line x1="310" y1="518" x2="420" y2="490" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)"></line>
+              <line x1="670" y1="170" x2="778" y2="250" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)"></line>
+              <line x1="670" y1="334" x2="778" y2="304" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)"></line>
+              <line x1="670" y1="490" x2="778" y2="358" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)"></line>
+
+              <text x="430" y="590" font-size="15" fill="#56635d">Design rule: each subsystem owns its own tables and behavior; cross-layer writes happen only through explicit handoff tools.</text>
+            </svg>
+          </div>
+          <div class="grid-2" style="margin-top: 16px;">
+            <div class="card">
+              <h3>Core design principles that repeat across specs</h3>
+              <ul>
+                <li>The agent owns judgment and prose; tools own durable facts and deterministic arithmetic.</li>
+                <li>Every number or claim needs provenance.</li>
+                <li>Cross-layer state changes must be explicit.</li>
+                <li>Provider-specific logic stays behind adapters and seams.</li>
+                <li>Defer complexity until a named workflow demands it.</li>
+              </ul>
+            </div>
+            <div class="card">
+              <h3>Why the architecture feels coherent</h3>
+              <ul>
+                <li>Research does not mutate strategy implicitly.</li>
+                <li>Market data is a subsystem, not a user-facing workflow.</li>
+                <li>Planner inputs are deliberately narrow and versionable.</li>
+                <li>The specs consistently separate build-now slices from design-ahead slices.</li>
+              </ul>
+            </div>
+          </div>
+        </section>
+
+        <section id="module-shape">
+          <h2>4. What the Finance Package Will Probably Look Like</h2>
+          <p class="section-intro">
+            The docs imply a package shape even though the code is not there yet. The likely structure is a
+            finance-specific implementation layer under <span class="mono">src/finance_hub</span> that mirrors the
+            durable spec split and registers tool wrappers in one place.
+          </p>
+          <div class="grid-2">
+            <div class="card">
+              <h3>Likely code organization</h3>
+              <div class="tree">src/finance_hub/
+  __init__.py                # tool registration surface
+  store.py                   # finance db access / connection helpers
+  migrations.py              # fin_schema_migrations runner
+  ingestion/
+    importers.py
+    reconcile.py
+    categories.py
+    balances.py
+    tools.py
+  research/
+    themes.py
+    notes.py
+    sources.py
+    events.py
+    briefs.py
+    tools.py
+  market_data/
+    providers.py
+    acquisition.py
+    snapshot.py
+    analytics.py             # later
+    tools.py
+  strategy/
+    versions.py
+    planner.py
+    holdings.py
+    tools.py</div>
+            </div>
+            <div class="card">
+              <h3>Design pattern from the current repo</h3>
+              <ul>
+                <li>Pure functions should hold domain logic.</li>
+                <li>Thin <span class="mono">@tool</span> wrappers register the public capability surface.</li>
+                <li>The same tools then become callable from shell and MCP without extra glue.</li>
+                <li>Finance-specific persistence stays finance-owned under <span class="mono">finance_hub.store</span>.</li>
+              </ul>
+              <p>
+                In other words, finance is not being designed as a web app. It is an installable agent tool package
+                with a CLI and MCP runtime.
+              </p>
+            </div>
+          </div>
+          <div class="callout" style="margin-top: 16px;">
+            <strong>Key structural insight:</strong> the durable specs are already acting like the package's
+            internal module boundaries. If implementation ignores that and collapses everything into one
+            a single catch-all module, it will fight the design almost immediately.
+          </div>
+        </section>
+
+        <section id="capabilities">
+          <h2>5. What the Finance Module Will Be Able to Do</h2>
+          <p class="section-intro">
+            The specs imply a large eventual tool surface, but most of it is explicitly staged. The useful way
+            to read it is by maturity: build-now, next, and later.
+          </p>
+          <div class="grid-3">
+            <div class="card">
+              <h3>Build-now capabilities</h3>
+              <ul>
+                <li>Import and normalize statement data.</li>
+                <li>Reconcile balances and compute historical surplus.</li>
+                <li>Fetch daily bars and expose grounded price envelopes.</li>
+                <li>Persist research themes, watchlists, notes, sources, and events.</li>
+              </ul>
+              <span class="status active">first practical release</span>
+            </div>
+            <div class="card">
+              <h3>Next-step capabilities</h3>
+              <ul>
+                <li>Manual snapshot loop for the active universe.</li>
+                <li>Theme and instrument briefs with generated markdown and HTML.</li>
+                <li>Promotion from approved research into strategy state.</li>
+              </ul>
+              <span class="status scaffold">after first slices land</span>
+            </div>
+            <div class="card">
+              <h3>Later gated capabilities</h3>
+              <ul>
+                <li>Metrics and comparison tables.</li>
+                <li>Fundamentals and filings activation.</li>
+                <li>Holdings-aware drift and portfolio aggregates.</li>
+                <li>Simulation and backtests.</li>
+              </ul>
+              <span class="status scaffold">design-ahead only</span>
+            </div>
+          </div>
+
+          <table style="margin-top: 16px;">
+            <thead>
+              <tr>
+                <th>Area</th>
+                <th>Representative tools</th>
+                <th>What they enable</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Ingestion</td>
+                <td><span class="mono">finance.import_csv</span>, <span class="mono">finance.balance_check</span>, <span class="mono">finance.historical_surplus</span></td>
+                <td>Turn account evidence into reconciled budget facts and a confidence-gated capital signal.</td>
+              </tr>
+              <tr>
+                <td>Research</td>
+                <td><span class="mono">finance.set_theme</span>, <span class="mono">finance.map_instruments</span>, <span class="mono">finance.add_source</span>, <span class="mono">finance.instrument_brief</span></td>
+                <td>Build a research knowledge base around industries, instruments, and evidence.</td>
+              </tr>
+              <tr>
+                <td>Market data acquisition</td>
+                <td><span class="mono">finance.prices</span>, <span class="mono">finance.snapshot</span></td>
+                <td>Fetch, persist, and read daily market observations without leaking vendor APIs upward.</td>
+              </tr>
+              <tr>
+                <td>Strategy seam</td>
+                <td><span class="mono">finance.promote_to_strategy</span></td>
+                <td>Make the transition from research state to planner state explicit and versioned.</td>
+              </tr>
+              <tr>
+                <td>Deferred analytics</td>
+                <td><span class="mono">finance.metrics</span>, <span class="mono">finance.compare</span>, <span class="mono">finance.fundamentals</span></td>
+                <td>Ground quantitative research and portfolio analysis once bar history and provider triggers justify it.</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section id="runtime">
+          <h2>6. How It Will Work End to End</h2>
+          <p class="section-intro">
+            The intended runtime model is straightforward: one tool registry, one database, several finance-owned
+            domains, and a set of flows that hand off explicit artifacts to one another.
+          </p>
+          <div class="svg-wrap">
+            <svg viewBox="0 0 1120 700" width="100%" role="img" aria-label="Finance runtime flow diagram">
+              <defs>
+                <marker id="arrow2" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+                  <path d="M0,0 L10,3 L0,6 Z" fill="#334155"></path>
+                </marker>
+              </defs>
+
+              <rect x="40" y="44" width="215" height="88" rx="18" fill="#fff9ef" stroke="#d9c6a0"></rect>
+              <text x="62" y="78" font-size="24" font-weight="700" fill="#62441a">User or agent</text>
+              <text x="62" y="106" font-size="15" fill="#7a6036">asks for import, research, pricing, or planning</text>
+
+              <rect x="330" y="30" width="210" height="116" rx="18" fill="#eef6ff" stroke="#b7c8f2"></rect>
+              <text x="352" y="64" font-size="22" font-weight="700" fill="#20438d">CLI / MCP</text>
+              <text x="352" y="92" font-size="15" fill="#3f5f9d">same tool names exposed through</text>
+              <text x="352" y="114" font-size="15" fill="#3f5f9d"><tspan class="mono">finance run</tspan> and agent RPC</text>
+
+              <rect x="615" y="30" width="230" height="116" rx="18" fill="#edf9f7" stroke="#abcec8"></rect>
+              <text x="637" y="64" font-size="22" font-weight="700" fill="#155e57">Tool registry</text>
+              <text x="637" y="92" font-size="15" fill="#32645e">thin wrappers register once</text>
+              <text x="637" y="114" font-size="15" fill="#32645e">and point to pure domain logic</text>
+
+              <rect x="900" y="30" width="180" height="116" rx="18" fill="#18231c" stroke="#0f766e"></rect>
+              <text x="920" y="64" font-size="22" font-weight="700" fill="#f4f1e8">Finance tools</text>
+              <text x="920" y="92" font-size="15" fill="#d8ded8">ingestion</text>
+              <text x="920" y="112" font-size="15" fill="#d8ded8">research</text>
+              <text x="920" y="132" font-size="15" fill="#d8ded8">market data</text>
+
+              <rect x="80" y="228" width="240" height="122" rx="18" fill="#fffaf0" stroke="#d8ccb2"></rect>
+              <text x="102" y="262" font-size="22" font-weight="700" fill="#5d4c25">Finance-owned tables</text>
+              <text x="102" y="290" font-size="15" fill="#715f35">examples:</text>
+              <text x="102" y="314" font-size="15" fill="#715f35">fin_transactions, fin_events,</text>
+              <text x="102" y="336" font-size="15" fill="#715f35">fin_price_bars, fin_strategy_versions</text>
+
+              <rect x="372" y="228" width="320" height="122" rx="18" fill="#fffaf5" stroke="#d7cbb7"></rect>
+              <text x="394" y="262" font-size="22" font-weight="700" fill="#4b3c23">Generated artifacts</text>
+              <text x="394" y="290" font-size="15" fill="#6a5b3f">research notes in markdown</text>
+              <text x="394" y="312" font-size="15" fill="#6a5b3f">theme/instrument briefs</text>
+              <text x="394" y="334" font-size="15" fill="#6a5b3f">static HTML readouts</text>
+
+              <rect x="744" y="228" width="296" height="122" rx="18" fill="#eef6ff" stroke="#bfd0f1"></rect>
+              <text x="766" y="262" font-size="22" font-weight="700" fill="#24488d">External systems</text>
+              <text x="766" y="290" font-size="15" fill="#45659d">CSV statements, PDFs, broker holdings,</text>
+              <text x="766" y="312" font-size="15" fill="#45659d">Yahoo/FMP/EDGAR, local vault</text>
+              <text x="766" y="334" font-size="15" fill="#45659d">all hidden behind seams</text>
+
+              <rect x="164" y="440" width="790" height="188" rx="22" fill="#f3ecde" stroke="#d4c8b4"></rect>
+              <text x="192" y="476" font-size="28" font-weight="700" fill="#3e3523">Typical future workflow</text>
+              <text x="192" y="516" font-size="17" fill="#5d533f">1. Import statements and reconcile.</text>
+              <text x="192" y="544" font-size="17" fill="#5d533f">2. Research a theme, map instruments, write notes, and attach sources.</text>
+              <text x="192" y="572" font-size="17" fill="#5d533f">3. Fetch grounded prices for planner and research readouts.</text>
+              <text x="192" y="600" font-size="17" fill="#5d533f">4. Promote approved research into a versioned strategy.</text>
+              <text x="192" y="628" font-size="17" fill="#5d533f">5. Later: combine capital, holdings, strategy, and prices into a deployment plan.</text>
+
+              <line x1="255" y1="88" x2="330" y2="88" stroke="#64748b" stroke-width="3" marker-end="url(#arrow2)"></line>
+              <line x1="540" y1="88" x2="615" y2="88" stroke="#64748b" stroke-width="3" marker-end="url(#arrow2)"></line>
+              <line x1="845" y1="88" x2="900" y2="88" stroke="#64748b" stroke-width="3" marker-end="url(#arrow2)"></line>
+              <line x1="980" y1="146" x2="900" y2="228" stroke="#64748b" stroke-width="3" marker-end="url(#arrow2)"></line>
+              <line x1="900" y1="146" x2="532" y2="228" stroke="#64748b" stroke-width="3" marker-end="url(#arrow2)"></line>
+              <line x1="900" y1="146" x2="320" y2="228" stroke="#64748b" stroke-width="3" marker-end="url(#arrow2)"></line>
+              <line x1="844" y1="350" x2="844" y2="440" stroke="#64748b" stroke-width="3" marker-end="url(#arrow2)"></line>
+              <line x1="530" y1="350" x2="530" y2="440" stroke="#64748b" stroke-width="3" marker-end="url(#arrow2)"></line>
+              <line x1="240" y1="350" x2="240" y2="440" stroke="#64748b" stroke-width="3" marker-end="url(#arrow2)"></line>
+            </svg>
+          </div>
+
+          <div class="grid-2" style="margin-top: 16px;">
+            <div class="card">
+              <h3>What the planner eventually consumes</h3>
+              <ul>
+                <li>Budget evidence, not raw statements</li>
+                <li>Approved strategy, not raw research watchlists</li>
+                <li>Grounded price envelopes, not vendor API responses</li>
+                <li>Later holdings snapshots and strategy weights</li>
+              </ul>
+            </div>
+            <div class="card">
+              <h3>What this buys you</h3>
+              <ul>
+                <li>You can ship ingestion before planning.</li>
+                <li>You can ship qualitative research before quant analytics.</li>
+                <li>You can swap providers without rewriting planner logic.</li>
+                <li>You can expose all of it to agents through one stable namespace.</li>
+              </ul>
+            </div>
+          </div>
+        </section>
+
+        <section id="roadmap">
+          <h2>7. Practical Reading of the Build Order</h2>
+          <p class="section-intro">
+            If you want to understand what should happen next in the codebase, the specs point to a fairly clear
+            implementation order.
+          </p>
+          <table>
+            <thead>
+              <tr>
+                <th>Order</th>
+                <th>Work</th>
+                <th>Why it is next</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>1</td>
+                <td>Build finance-owned persistence and migration scaffolding</td>
+                <td>Every spec assumes <span class="mono">fin_*</span> tables and finance-owned migration control.</td>
+              </tr>
+              <tr>
+                <td>2</td>
+                <td>Implement ingestion slice 1 tools</td>
+                <td>This is the most complete implementation contract and creates the budget evidence side.</td>
+              </tr>
+              <tr>
+                <td>3</td>
+                <td>Implement market-data acquisition Slice A</td>
+                <td><span class="mono">finance.prices(...)</span> is the first hard dependency for the planner and for research briefs with pricing context.</td>
+              </tr>
+              <tr>
+                <td>4</td>
+                <td>Implement the qualitative research layer</td>
+                <td>The research spec is already useful before metrics and fundamentals activate.</td>
+              </tr>
+              <tr>
+                <td>5</td>
+                <td>Sharpen and implement strategy state + promotion seam</td>
+                <td>The planner cannot be honest until research-to-strategy handoff is explicit.</td>
+              </tr>
+              <tr>
+                <td>6</td>
+                <td>Add market-data snapshot loop and later analytics gates</td>
+                <td>Only once there is a bar history worth analyzing.</td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="grid-2" style="margin-top: 16px;">
+            <div class="card">
+              <h3>Most important unresolved gap</h3>
+              <p>
+                Strategy is the least-finished durable spec. The package already knows how to produce budget evidence,
+                research evidence, and price inputs, but the actual planner-owned state model still needs extraction
+                from <span class="mono">requirements-dump.md</span> into a stronger contract.
+              </p>
+            </div>
+            <div class="card">
+              <h3>Most likely first meaningful demo</h3>
+              <p>
+                A realistic early end-to-end demo would be: import Chase CSVs, reconcile balances, compute
+                <span class="mono">historical_surplus</span>, record a theme and a few instruments, fetch current price
+                envelopes with <span class="mono">finance.prices(...)</span>, and render a grounded theme brief.
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <section id="sources">
+          <h2>8. Grounding and References</h2>
+          <p class="section-intro">
+            This explainer was grounded in the repo files below plus the Claude Code HTML article that motivated the format.
+          </p>
+          <div class="grid-2">
+            <div class="card">
+              <h3>Local repo sources</h3>
+              <ul class="source-list">
+                <li><a href="./README.md">docs/requests/finance/README.md</a></li>
+                <li><a href="./ingestion/spec.md">docs/requests/finance/ingestion/spec.md</a></li>
+                <li><a href="./ingestion/working-doc.md">docs/requests/finance/ingestion/working-doc.md</a></li>
+                <li><a href="./research/spec.md">docs/requests/finance/research/spec.md</a></li>
+                <li><a href="./strategy/spec.md">docs/requests/finance/strategy/spec.md</a></li>
+                <li><a href="./market-data/spec.md">docs/requests/finance/market-data/spec.md</a></li>
+                <li><a href="./market-data/acquisition.md">docs/requests/finance/market-data/acquisition.md</a></li>
+                <li><a href="./market-data/analytics.md">docs/requests/finance/market-data/analytics.md</a></li>
+                <li><a href="./market-data/provider-comparison.md">docs/requests/finance/market-data/provider-comparison.md</a></li>
+                <li><a href="../../../notes/finance-corpus/00-inbox/requirements-dump.md">notes/finance-corpus/00-inbox/requirements-dump.md</a></li>
+                <li><a href="../../../notes/finance-corpus/00-inbox/data-pipeline-answers.md">notes/finance-corpus/00-inbox/data-pipeline-answers.md</a></li>
+                <li><a href="../../../notes/finance-corpus/00-inbox/data-source-comparison.md">notes/finance-corpus/00-inbox/data-source-comparison.md</a></li>
+                <li><a href="../../../notes/finance-corpus/00-inbox/ticker-deep-dive-target-experience.md">notes/finance-corpus/00-inbox/ticker-deep-dive-target-experience.md</a></li>
+                <li><a href="../../../src/finance_hub/cli.py">src/finance_hub/cli.py</a></li>
+                <li><a href="../../../src/finance_hub/runtime/registry.py">src/finance_hub/runtime/registry.py</a></li>
+                <li><a href="../../../src/finance_hub/mcp_server.py">src/finance_hub/mcp_server.py</a></li>
+                <li><a href="../../../src/finance_hub/__init__.py">src/finance_hub/__init__.py</a></li>
+              </ul>
+            </div>
+            <div class="card">
+              <h3>External source</h3>
+              <ul class="source-list">
+                <li>
+                  <a href="https://claude.com/blog/using-claude-code-the-unreasonable-effectiveness-of-html">
+                    Using Claude Code: The unreasonable effectiveness of HTML
+                  </a>
+                </li>
+              </ul>
+              <p class="footnotes">
+                The article's main relevant ideas were: HTML is better for dense explanations, diagrams, and shareable
+                specs; it works especially well for planning and understanding code; and one useful pattern is a web of
+                explainer artifacts rather than a single long markdown plan.
+              </p>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+</body>
+</html>

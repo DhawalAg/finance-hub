@@ -2,7 +2,7 @@
 
 **Status:** Split into two sub-specs; acquisition is the active build, analytics is design-ahead
 **Updated:** 2026-06-04
-**Home hub:** `hubs/finance/`
+**Home package:** `src/finance_hub/`
 
 This is the index for the market-data subsystem. It does two distinct jobs, now specced separately so
 the active contract stays lean while the deferred half evolves on its own:

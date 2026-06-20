@@ -139,7 +139,7 @@ through an explicit promotion step. (Held open as R1.)
 4. **Research note / dossier** — the prose: the thesis, the industry deep-dive, the per-instrument
    analysis. Lives in the **vault as markdown** (corpus rule: *SQLite owns numbers, markdown owns
    prose*). SQLite stores only the relative note path + structured facts. The finance-specific vault
-   convention is defined in Block 5; `hubs/research` is only a stub today.
+   convention is defined in Block 5.
 5. **Important date / event** (`fin_events`) — earnings calls, ex-dividend, lockup expiry, product
    events. Structured facts; agent-entered now, `EarningsProvider`-fed later. Powers "what matters
    next" (req #3).
@@ -212,7 +212,7 @@ re-research an industry; you drill, annotate, and the structure compounds into t
 
 ## 6. Tools (research namespace — all thin wrappers over agent research)
 
-All `finance.*`, co-located in `hubs/finance/`, pure helpers in submodules, `@tool` wrappers thin
+All `finance.*`, co-located in `src/finance_hub/`, pure helpers in submodules, `@tool` wrappers thin
 (mirrors the budget slice). Namespace/hub relationship held open as R2.
 
 | Tool | Signature (kwargs) | Returns | Notes |
@@ -289,7 +289,7 @@ loud; scheduled runs should log-and-continue.
 
 ## 8. Data model (research-owned `fin_*` tables; shapes to confirm)
 
-Finance owns these in `hubs/finance/store.py` (not `core/store.py`), via the finance-owned migration
+Finance owns these under `src/finance_hub/store/`, via the finance-owned migration
 table (`fin_schema_migrations`, per ingestion M1 — **not** global `PRAGMA user_version`). FK + `CHECK`
 + indexes per ingestion DB1.
 
@@ -421,9 +421,9 @@ Work these block-by-block like the budget slice's S/L/D/etc. queue. Lean shown w
 | # | Block | Question | Lean |
 |---|---|---|---|
 | **R1** | Model | Theme vs sleeve — one entity with a lifecycle or separate research-theme and strategy-sleeve objects? | **Separate objects.** Research themes remain exploratory; explicit promotion snapshots selected themes into versioned planner sleeves. |
-| **R2** | Spine | Namespace + hub: `finance.*` in `hubs/finance` vs. reuse the generic `research` hub? | `finance.*`; **reuse the vault-dossier *pattern*** from `hubs/research`, not the hub. |
+| **R2** | Spine | Namespace + package: `finance.*` in `src/finance_hub` vs. a generic research package? | `finance.*`; **reuse the vault-dossier *pattern*** where useful, not a separate hub. |
 | **R3** | Taxonomy | Free-form agent-authored themes vs. anchor to a standard scheme (GICS sectors/industries)? | **Free-form** (the user's themes — "compute", "model providers" — aren't GICS); optional GICS tag. |
-| **R4** | Vault | Where in the Obsidian vault do notes live; front-matter schema; one note per theme + per instrument; link structure? | Settle a finance-specific convention before writing. `hubs/research` is only a stub today. |
+| **R4** | Vault | Where in the Obsidian vault do notes live; front-matter schema; one note per theme + per instrument; link structure? | Settle a finance-specific convention before writing. |
 | **R5** | Events | Which `event_type`s in v1; agent-entered vs. `EarningsProvider`; how to expire stale dates; yfinance earnings-date unreliability. | Start `earnings`+`ex_dividend`, agent-entered; FMP when B2 #2 fires. |
 | **R6** | Providers | Exact activation triggers + what's decision-grade (edgartools) vs screening (FMP) for *this* lens. | Per data-source-comparison trigger path; edgartools = decision-grade, FMP = screening. |
 | **R7** | Dependency | Do briefs block on the metrics/price pipeline, or degrade gracefully when it's absent? | **Degrade gracefully** — quantitative fields optional; qualitative research stands alone. |
@@ -492,7 +492,7 @@ fin_strategy_instruments
 | 2026-05-31 | R3, R14 — theme taxonomy and instrument model | Use free-form hierarchical research themes and a ticker-centric US-listed USD `stock | etf` reference model in v1. | Preserve extension points, but defer external taxonomy enforcement and securities-master complexity until a demonstrated workflow needs them. |
 | 2026-05-31 | R10, R13 — provenance and upkeep | Store reusable finance-owned sources, link them to themes / instruments, cite stable source IDs from markdown, and surface explicit review reminders. Keep ad hoc search results ephemeral unless intentionally promoted. | Build a maintainable evidence trail without a crawler, knowledge graph, or structured claim extraction. |
 | 2026-05-31 | R4 — vault-note convention | Store editable theme / instrument thesis notes separately from generated markdown / static-HTML readouts under a configurable vault root. Persist relative paths and keep front matter minimal. | Preserve a portable knowledge base while ensuring replaceable generated artifacts are visibly marked **do not edit**. |
-| 2026-05-31 | R2 — namespace and module ownership | Keep user-facing tools and domain behavior under `finance.*` / `hubs/finance`, split storage, research logic, vault access, and rendering by responsibility, and extract generic vault helpers only after a second real consumer exists. | Preserve modular internals without building a premature cross-hub framework. |
+| 2026-05-31 | R2 — namespace and module ownership | Keep user-facing tools and domain behavior under `finance.*` / `src/finance_hub`, split storage, research logic, vault access, and rendering by responsibility, and extract generic vault helpers only after a second real consumer exists. | Preserve modular internals without building a premature generic framework. |
 | 2026-05-31 | R9 — conviction metadata | Store optional coarse `1..5` conviction + required short rationale on the ticker-within-theme edge. Keep detailed reasoning in editable notes and exclude conviction from promotion eligibility and planner math. | Preserve useful structured research judgment without introducing a hidden allocation algorithm. |
 | 2026-05-31 | R5 — important events fast follow | Model cited historical and future event occurrences, with manual instrument-level intake first. Preserve additive provider enrichment and a later price-bar analytics seam without building calendar ingestion or simulations now. | Support “what matters next?” and future event-response analysis without expanding the first research slice. |
 | 2026-05-31 | R7, R8 — graceful quantitative integration | Keep qualitative briefs useful without providers. Surface optional grounded quantitative context with explicit availability metadata, while leaving deterministic screens, valuations, and event-response analytics outside research rendering. | Quantitative enrichment remains additive and visible without turning the research lens into an analytics engine. |
@@ -695,11 +695,11 @@ create cross-domain coupling; duplicating common filesystem helpers would also a
 **Recommended contract:**
 
 - Expose user-facing tools under the `finance.*` namespace and keep finance-owned tables, migrations,
-  and behavior under `hubs/finance/`.
+  and behavior under `src/finance_hub/`.
 - Organize internal modules by responsibility rather than one large finance file:
 
 ```text
-hubs/finance/
+src/finance_hub/
   __init__.py
   store.py
   research.py
@@ -711,7 +711,7 @@ hubs/finance/
 - `vault.py` owns finance-vault path resolution, note validation, and atomic file writes.
 - `render.py` owns markdown / static-HTML rendering from a brief model. It does not query SQLite
   directly.
-- Reuse generic helpers from `hubs/research` only after a real second consumer exists. Keep the initial
+- Extract generic helpers only after a real second consumer exists. Keep the initial
   finance implementation local, but design helper inputs generically enough that extraction later is
   mechanical.
 - Keep registered `@tool` wrappers thin. Pure helpers accept plain values and return plain structures

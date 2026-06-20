@@ -103,7 +103,8 @@ ending_balance_cents = starting_balance_cents + sum(transaction.amount_cents)
 
 - Add `fin_schema_migrations`.
 - Run missing ordered finance migrations transactionally and record versions only after success.
-- Do not use database-global `PRAGMA user_version`; `hub.db` is shared by multiple hubs.
+- Do not use database-global `PRAGMA user_version`; finance owns explicit migration state in
+  `fin_schema_migrations`.
 
 #### A1 — Account Configuration
 

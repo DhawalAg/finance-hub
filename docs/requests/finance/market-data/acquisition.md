@@ -2,7 +2,7 @@
 
 **Status:** Active build (L0–L1); build line drawn (§5) — Slice 1 = A, Slice 2 = B
 **Updated:** 2026-06-04
-**Home hub:** `hubs/finance/`
+**Home package:** `src/finance_hub/`
 
 The acquisition half of the [market-data subsystem](./spec.md): turn external provider responses into
 grounded, provenance-stamped daily market observations, then expose consumer-sized price envelopes.
