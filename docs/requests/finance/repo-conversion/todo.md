@@ -1,6 +1,6 @@
 # Finance-Only Repo Conversion TODO
 
-**Status:** in progress
+**Status:** complete
 **Request:** convert the former multi-hub scaffold into a finance-focused installable package while preserving the request-scoped docs layout.
 
 ## Decisions
@@ -21,7 +21,7 @@
 - [x] Remove inactive `hubs/*` packages and non-finance note corpora.
 - [x] Add root README explaining the finance-only package shape.
 - [x] Run import/CLI smoke checks.
-- [ ] Commit the migration.
+- [x] Commit the migration.
 
 ## Follow-Up Work
 
