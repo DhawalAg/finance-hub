@@ -1,0 +1,31 @@
+{
+  "General": {
+    "Code": "AAPL",
+    "Type": "Common Stock",
+    "Name": "Apple Inc",
+    "UpdatedAt": "2026-05-30"
+  },
+  "Highlights": {
+    "ProfitMargin": 0.252,
+    "QuarterlyRevenueGrowthYOY": 0.081,
+    "PriceSalesTTM": 7.43
+  },
+  "Valuation": {
+    "EnterpriseValueEbitda": 22.31,
+    "ForwardPriceSalesTTM": 6.95
+  },
+  "Financials": {
+    "Balance_Sheet": {
+      "quarterly": {
+        "2026-03-31": {
+          "date": "2026-03-31",
+          "shortLongTermDebtTotal": "104500000000",
+          "cash": "29900000000"
+        }
+      }
+    }
+  },
+  "Earnings": {
+    "next_date": "2026-07-30"
+  }
+}

@@ -26,6 +26,30 @@ MIGRATIONS: list[tuple[int, str]] = [
         );
         """,
     ),
+    (
+        2,
+        # Slice 6 — compact fundamentals screening cache. Every value is a
+        # graded-provenance envelope: source/grade/as_of are required, grade is
+        # constrained to the envelope vocabulary, and gaps are explicit (absent
+        # rows), never zero. `source` is in the key so two vendors never silently
+        # merge into one series, mirroring fin_price_bars.
+        """
+        CREATE TABLE IF NOT EXISTS fin_fundamentals (
+            ticker      TEXT NOT NULL,
+            field       TEXT NOT NULL,
+            as_of       TEXT NOT NULL,
+            value       TEXT,
+            unit        TEXT,
+            source      TEXT NOT NULL,
+            grade       TEXT NOT NULL CHECK (grade IN ('decision', 'screening')),
+            fetched_at  TEXT NOT NULL,
+            source_ref  TEXT,
+            PRIMARY KEY (ticker, field, as_of, source)
+        );
+        CREATE INDEX IF NOT EXISTS ix_fin_fundamentals_ticker_field
+            ON fin_fundamentals (ticker, field);
+        """,
+    ),
 ]
 
 
