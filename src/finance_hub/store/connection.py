@@ -31,5 +31,5 @@ def status() -> dict:
     """Counts per table — used by the health tool to confirm the spine is wired."""
     init()
     with connect() as conn:
-        tables = ["fin_schema_migrations", "fin_fundamentals"]
+        tables = ["fin_schema_migrations", "fin_fundamentals", "fin_fetch_log"]
         return {t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in tables}

@@ -91,6 +91,47 @@ class DailyBarEnvelope:
 
 
 @dataclass(frozen=True)
+class FetchOutcome:
+    """One per-ticker result of a snapshot fetch (the trip-wire record).
+
+    ``status`` is ``"ok"`` (bars stored), ``"empty"`` (provider sourced no
+    bars), or ``"error"`` (the fetch raised or the ticker was rejected).
+    Both ``empty`` and ``error`` log ``ok=0`` to ``fin_fetch_log``; the
+    distinction is kept here so a caller can tell a degraded provider from a
+    delisted/unsupported ticker.
+    """
+
+    ticker: str
+    status: str
+    bars_written: int
+    error: Optional[str]
+
+
+@dataclass(frozen=True)
+class SnapshotResult:
+    """Summary of a ``snapshot()`` run over a universe of tickers."""
+
+    as_of: str
+    source: str
+    outcomes: tuple
+
+    @property
+    def ok(self) -> tuple:
+        return tuple(o for o in self.outcomes if o.status == "ok")
+
+    @property
+    def failures(self) -> tuple:
+        """Non-success outcomes (``empty`` + ``error``) — the trip-wire set."""
+        return tuple(o for o in self.outcomes if o.status != "ok")
+
+    @property
+    def failure_rate(self) -> float:
+        if not self.outcomes:
+            return 0.0
+        return len(self.failures) / len(self.outcomes)
+
+
+@dataclass(frozen=True)
 class PriceEnvelope:
     """Consumer-sized projection of a stored bar (never a bare scalar)."""
 
@@ -301,6 +342,109 @@ def prices(
                 raise PriceFetchError(missing)
 
     return result
+
+
+def _log_fetch(conn, ticker: str, attempted_at: str, source: str, *,
+               ok: int, error: Optional[str]) -> None:
+    conn.execute(
+        """
+        INSERT INTO fin_fetch_log (ticker, attempted_at, source, ok, error)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (ticker, attempted_at, source, ok, error),
+    )
+
+
+def _default_universe(conn) -> list[str]:
+    """Derive the snapshot universe from stored facts.
+
+    Per the acquisition spec (D4) the first snapshot universe is *approved
+    strategy sleeve instruments ∪ current holdings*. The strategy layer is
+    not built yet, so this resolves to the current holdings only — the
+    supported, tickered positions of the most recent immutable portfolio
+    snapshot. The strategy-sleeve union folds in once that slice lands; the
+    research watchlist stays on-demand (never auto-priced here).
+    """
+    snap = conn.execute(
+        "SELECT snapshot_id FROM fin_portfolio_snapshots "
+        "ORDER BY as_of DESC, created_at DESC LIMIT 1"
+    ).fetchone()
+    if snap is None:
+        return []
+    rows = conn.execute(
+        "SELECT DISTINCT ticker FROM fin_portfolio_positions "
+        "WHERE snapshot_id = ? AND ticker IS NOT NULL AND is_supported = 1 "
+        "ORDER BY ticker",
+        (snap["snapshot_id"],),
+    ).fetchall()
+    return [r["ticker"] for r in rows]
+
+
+def _snapshot_one(conn, provider, ticker: str, *, source: str, start: date,
+                  as_of: date, attempted_at: str) -> FetchOutcome:
+    """Fetch + persist one ticker, log-and-continue on any failure.
+
+    A bad ticker (provider error, rejected listing, or an empty result)
+    records ``ok=0`` to ``fin_fetch_log`` and returns a non-``ok`` outcome
+    rather than aborting the surrounding batch.
+    """
+    try:
+        _validate_ticker(ticker)
+        bars = provider.fetch_daily_bars((ticker,), start=start, end=as_of)
+    except Exception as exc:  # noqa: BLE001 — log-and-continue is the contract
+        _log_fetch(conn, ticker, attempted_at, source, ok=0, error=str(exc))
+        return FetchOutcome(ticker, "error", 0, str(exc))
+
+    if not bars:
+        msg = "provider returned no bars"
+        _log_fetch(conn, ticker, attempted_at, source, ok=0, error=msg)
+        return FetchOutcome(ticker, "empty", 0, msg)
+
+    _persist_bars(conn, bars)
+    _log_fetch(conn, ticker, attempted_at, source, ok=1, error=None)
+    return FetchOutcome(ticker, "ok", len(bars), None)
+
+
+def snapshot(
+    tickers=None,
+    *,
+    as_of: Optional[date] = None,
+) -> SnapshotResult:
+    """Batch-acquire daily bars for a universe of tickers.
+
+    Loops the universe through the ``PriceProvider`` seam (one isolated
+    fetch per ticker so a single failure can't poison the batch), upserts
+    the returned bars into ``fin_price_bars`` on the same write path as
+    ``prices()``, and records every per-ticker outcome to ``fin_fetch_log``
+    — the reliability trip-wire counter. Failures are logged and surfaced
+    in the returned :class:`SnapshotResult`, never silently swallowed.
+
+    ``tickers`` defaults to the current-holdings universe (see
+    :func:`_default_universe`). Re-running is idempotent for bars (the
+    ``(ticker, session_date, source)`` upsert key); ``fin_fetch_log`` is
+    append-only so the trip-wire history is preserved.
+    """
+    now = factories.get_clock().now()
+    if as_of is None:
+        as_of = now.date()
+    attempted_at = now.isoformat()
+    provider = factories.get_price_provider()
+    source = _provider_source()
+    start = as_of - timedelta(days=HISTORY_WINDOW_DAYS)
+
+    outcomes: list[FetchOutcome] = []
+    with connection.connect() as conn:
+        universe = list(tickers) if tickers is not None else _default_universe(conn)
+        for ticker in universe:
+            outcomes.append(
+                _snapshot_one(
+                    conn, provider, ticker, source=source, start=start,
+                    as_of=as_of, attempted_at=attempted_at,
+                )
+            )
+        conn.commit()
+
+    return SnapshotResult(as_of=as_of.isoformat(), source=source, outcomes=tuple(outcomes))
 
 
 def _provider_source() -> str:
