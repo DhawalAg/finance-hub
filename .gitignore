@@ -5,3 +5,6 @@ py3env
 *.db
 .env
 .DS_Store
+*.egg-info/
+workspace/
+node_modules/
