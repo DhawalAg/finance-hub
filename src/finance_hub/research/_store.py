@@ -98,7 +98,7 @@ def list_themes(
     if parent_key is not None:
         clauses.append("parent_key = ?")
         params.append(parent_key)
-    where = " AND ".join(clauses) if clauses else "1=1"
+    where = " AND ".join(clauses)
     sql = f"SELECT * FROM fin_themes WHERE {where} ORDER BY key"
     with connection.connect() as conn:
         rows = conn.execute(sql, params).fetchall()

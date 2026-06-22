@@ -11,17 +11,10 @@ from pathlib import Path
 
 import pytest
 
+from tests.helpers import FixedClock
 from finance_hub import factories
 from finance_hub.research import tools as research
 from finance_hub.store import connection, migrations
-
-
-class FixedClock:
-    def __init__(self, instant):
-        self._instant = instant
-
-    def now(self):
-        return self._instant
 
 
 @pytest.fixture(autouse=True)

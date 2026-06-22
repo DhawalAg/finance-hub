@@ -22,10 +22,8 @@ _THEME_STATUSES = ("exploring", "watching", "archived")
 _INSTRUMENT_TYPES = ("stock", "etf")
 _INSTRUMENT_ROLES = ("broad_market_etf", "theme_etf", "single_stock")
 _CANDIDATE_STATUSES = ("candidate", "watching", "approved", "rejected")
-_NOTE_SCOPES = ("theme", "instrument")
+_SCOPES = ("theme", "instrument")
 _NOTE_SUBDIR = {"theme": "themes", "instrument": "instruments"}
-_LINK_SCOPES = ("theme", "instrument")
-_LINK_STATUSES = ("active", "superseded", "archived")
 
 
 def _now() -> str:
@@ -221,7 +219,7 @@ def _note_rel_path(scope: str, key: str) -> str:
     return f"research/{_NOTE_SUBDIR[scope]}/{key}.md"
 
 
-def _require_note_target(scope: str, key: str) -> None:
+def _require_target(scope: str, key: str) -> None:
     if scope == "theme":
         if _store.get_theme(key) is None:
             raise LookupError(f"no theme with key {key!r}")
@@ -238,9 +236,9 @@ def _require_note_target(scope: str, key: str) -> None:
     ),
 )
 def set_research_note(*, scope: str, key: str, body: str) -> dict:
-    if scope not in _NOTE_SCOPES:
-        raise ValueError(f"scope must be one of {_NOTE_SCOPES}, got {scope!r}")
-    _require_note_target(scope, key)
+    if scope not in _SCOPES:
+        raise ValueError(f"scope must be one of {_SCOPES}, got {scope!r}")
+    _require_target(scope, key)
     rel = _note_rel_path(scope, key)
     abs_path = _workspace_root() / rel
     abs_path.parent.mkdir(parents=True, exist_ok=True)
@@ -258,8 +256,8 @@ def set_research_note(*, scope: str, key: str, body: str) -> dict:
     description="Read the thesis/dossier note for a theme or instrument.",
 )
 def get_research_note(*, scope: str, key: str) -> dict:
-    if scope not in _NOTE_SCOPES:
-        raise ValueError(f"scope must be one of {_NOTE_SCOPES}, got {scope!r}")
+    if scope not in _SCOPES:
+        raise ValueError(f"scope must be one of {_SCOPES}, got {scope!r}")
     if scope == "theme":
         row = _store.get_theme(key)
         if row is None:
@@ -279,15 +277,6 @@ def get_research_note(*, scope: str, key: str) -> dict:
 # ---------------------------------------------------------------------------
 # sources + citation links — upsert by URL, review_after, supersession
 # ---------------------------------------------------------------------------
-
-
-def _require_link_target(scope: str, key: str) -> None:
-    if scope == "theme":
-        if _store.get_theme(key) is None:
-            raise LookupError(f"no theme with key {key!r}")
-    else:
-        if _store.get_instrument(key) is None:
-            raise LookupError(f"no instrument with ticker {key!r}")
 
 
 @tool(
@@ -332,11 +321,11 @@ def link_source(
     note: Optional[str] = None,
     review_after: Optional[str] = None,
 ) -> dict:
-    if scope not in _LINK_SCOPES:
-        raise ValueError(f"scope must be one of {_LINK_SCOPES}, got {scope!r}")
+    if scope not in _SCOPES:
+        raise ValueError(f"scope must be one of {_SCOPES}, got {scope!r}")
     if _store.get_source_by_id(source_id) is None:
         raise LookupError(f"no source with id {source_id!r}")
-    _require_link_target(scope, key)
+    _require_target(scope, key)
     return _store.upsert_source_link(
         source_id=source_id,
         scope=scope,
@@ -362,8 +351,8 @@ def supersede_source_link(
     key: str,
     note: Optional[str] = None,
 ) -> dict:
-    if scope not in _LINK_SCOPES:
-        raise ValueError(f"scope must be one of {_LINK_SCOPES}, got {scope!r}")
+    if scope not in _SCOPES:
+        raise ValueError(f"scope must be one of {_SCOPES}, got {scope!r}")
     link = _store.upsert_source_link(
         source_id=source_id,
         scope=scope,
