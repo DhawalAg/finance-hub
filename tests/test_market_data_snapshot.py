@@ -26,7 +26,6 @@ import pytest
 from finance_hub import factories
 from finance_hub.market_data.tools import (
     DailyBarEnvelope,
-    FetchOutcome,
     SnapshotResult,
     snapshot,
 )

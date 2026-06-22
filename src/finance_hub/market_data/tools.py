@@ -113,14 +113,14 @@ class SnapshotResult:
 
     as_of: str
     source: str
-    outcomes: tuple
+    outcomes: tuple[FetchOutcome, ...]
 
     @property
-    def ok(self) -> tuple:
+    def ok(self) -> tuple[FetchOutcome, ...]:
         return tuple(o for o in self.outcomes if o.status == "ok")
 
     @property
-    def failures(self) -> tuple:
+    def failures(self) -> tuple[FetchOutcome, ...]:
         """Non-success outcomes (``empty`` + ``error``) — the trip-wire set."""
         return tuple(o for o in self.outcomes if o.status != "ok")
 
@@ -392,17 +392,18 @@ def _snapshot_one(conn, provider, ticker: str, *, source: str, start: date,
         _validate_ticker(ticker)
         bars = provider.fetch_daily_bars((ticker,), start=start, end=as_of)
     except Exception as exc:  # noqa: BLE001 — log-and-continue is the contract
-        _log_fetch(conn, ticker, attempted_at, source, ok=0, error=str(exc))
-        return FetchOutcome(ticker, "error", 0, str(exc))
+        error_msg = str(exc)
+        _log_fetch(conn, ticker, attempted_at, source, ok=0, error=error_msg)
+        return FetchOutcome(ticker=ticker, status="error", bars_written=0, error=error_msg)
 
     if not bars:
-        msg = "provider returned no bars"
-        _log_fetch(conn, ticker, attempted_at, source, ok=0, error=msg)
-        return FetchOutcome(ticker, "empty", 0, msg)
+        error_msg = "provider returned no bars"
+        _log_fetch(conn, ticker, attempted_at, source, ok=0, error=error_msg)
+        return FetchOutcome(ticker=ticker, status="empty", bars_written=0, error=error_msg)
 
     _persist_bars(conn, bars)
     _log_fetch(conn, ticker, attempted_at, source, ok=1, error=None)
-    return FetchOutcome(ticker, "ok", len(bars), None)
+    return FetchOutcome(ticker=ticker, status="ok", bars_written=len(bars), error=None)
 
 
 def snapshot(
