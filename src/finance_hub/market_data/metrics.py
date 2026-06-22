@@ -43,7 +43,7 @@ RETURN_WINDOWS = ("1m", "3m", "6m", "1y")
 
 # The risk/position metrics are computed over ~1 year of daily history.
 RISK_WINDOW = "1y"
-RISK_WINDOW_DAYS = 365
+RISK_WINDOW_DAYS = WINDOW_DAYS[RISK_WINDOW]
 
 # --- metric vocabulary ---------------------------------------------------
 
@@ -265,6 +265,7 @@ def compute_ticker_metrics(
         ticker_rets[window] = r
         out.append(_metric(TICKER, ticker, RET, window, r, source=source, as_of=as_of_str))
 
+    risk_pts = _window_points(pts, as_of, RISK_WINDOW_DAYS)
     out.append(_metric(
         TICKER, ticker, VOL, RISK_WINDOW,
         realized_volatility(pts, as_of=as_of, window_days=RISK_WINDOW_DAYS),
@@ -272,12 +273,12 @@ def compute_ticker_metrics(
     ))
     out.append(_metric(
         TICKER, ticker, MAX_DRAWDOWN, RISK_WINDOW,
-        max_drawdown(_window_points(pts, as_of, RISK_WINDOW_DAYS)),
+        max_drawdown(risk_pts),
         source=source, as_of=as_of_str,
     ))
     out.append(_metric(
         TICKER, ticker, CURRENT_DRAWDOWN, RISK_WINDOW,
-        current_drawdown(_window_points(pts, as_of, RISK_WINDOW_DAYS)),
+        current_drawdown(risk_pts),
         source=source, as_of=as_of_str,
     ))
     out.append(_metric(
@@ -313,20 +314,18 @@ def series_from_bars(conn, ticker: str, source: str, as_of: date) -> list[PriceP
     """
     rows = conn.execute(
         """
-        SELECT session_date, adj_close_micros, close_micros
+        SELECT session_date,
+               COALESCE(adj_close_micros, close_micros) AS price_micros
         FROM fin_price_bars
         WHERE ticker = ? AND source = ? AND session_date <= ?
         ORDER BY session_date
         """,
         (ticker, source, as_of.isoformat()),
     ).fetchall()
-    out: list[PricePoint] = []
-    for row in rows:
-        micros = row["adj_close_micros"]
-        if micros is None:
-            micros = row["close_micros"]
-        out.append(PricePoint(date.fromisoformat(row["session_date"]), micros / PRICE_SCALE))
-    return out
+    return [
+        PricePoint(date.fromisoformat(row["session_date"]), row["price_micros"] / PRICE_SCALE)
+        for row in rows
+    ]
 
 
 # --- storage -------------------------------------------------------------
