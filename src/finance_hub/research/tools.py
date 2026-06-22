@@ -387,3 +387,248 @@ def list_sources(
 def sources_due_for_review(*, as_of: Optional[str] = None) -> dict:
     as_of = as_of or _now()
     return {"as_of": as_of, "due": _store.sources_due_for_review(as_of=as_of)}
+
+
+# ---------------------------------------------------------------------------
+# read contract into strategy/planning — candidate_evidence + the gap scan
+#
+# These are READ-ONLY: research discovery never mutates strategy or alters
+# which instruments the planner can fund (PRD stories 12-14). They surface
+# stable references + readiness + gaps, never rendered prose only.
+# ---------------------------------------------------------------------------
+
+# Gap codes, ordered by deployment-blocking severity (higher == more blocking).
+# Promotion gates everything; missing thesis/citations gate the cited-thesis
+# bar; staleness and the one-time fundamentals bar are softer.
+_GAP_SEVERITY = {
+    "PROMOTION_REQUIRED": 100,
+    "MISSING_THESIS_NOTE": 80,
+    "MISSING_CITATIONS": 70,
+    "STALE_SOURCES": 50,
+    "MISSING_FUNDAMENTALS": 40,
+    # global (non-candidate) deployment-blocking gaps
+    "NO_ACTIVE_STRATEGY": 95,
+    "NO_PORTFOLIO_SNAPSHOT": 60,
+    "NO_PRICE_DATA": 45,
+    "NO_RECENT_PLANS": 20,
+}
+
+# Broad-market ETFs may use a compact ETF evidence pack instead of a full
+# cited thesis (research spec §2 evidence gates).
+_THESIS_REQUIRED_ROLES = ("single_stock", "theme_etf")
+
+
+def _strategy_has_eligible(ticker: str) -> bool:
+    """Whether ``ticker`` is eligible in an active strategy version.
+
+    The strategy slice (promotion + versioned strategy) is not built yet, so
+    the table is absent and this is always False — every candidate honestly
+    reports ``promotion_required``. Forward-compatible once the table lands.
+    """
+    return _store.has_rows(
+        "fin_strategy_eligible_instruments",
+        where="ticker = ?",
+        params=(ticker,),
+    )
+
+
+def _candidate_gaps(
+    *,
+    instrument_role: str,
+    has_thesis: bool,
+    has_citations: bool,
+    has_stale: bool,
+    promotion_required: bool,
+    has_fundamentals: bool,
+) -> dict:
+    """Evidence gaps blocking DCA vs one-time eligibility for one candidate."""
+    dca: list[str] = []
+    if instrument_role in _THESIS_REQUIRED_ROLES:
+        if not has_thesis:
+            dca.append("MISSING_THESIS_NOTE")
+        if not has_citations:
+            dca.append("MISSING_CITATIONS")
+    if has_stale:
+        dca.append("STALE_SOURCES")
+    if promotion_required:
+        dca.append("PROMOTION_REQUIRED")
+    # One-time buys clear a higher bar: every DCA gap plus compact
+    # valuation/fundamental context (research spec §2).
+    one_time = list(dca)
+    if not has_fundamentals:
+        one_time.append("MISSING_FUNDAMENTALS")
+    return {"dca": dca, "one_time": one_time}
+
+
+_STATUS_RANK = {"approved": 3, "watching": 2, "candidate": 1, "rejected": 0}
+
+
+@tool(
+    name="finance.candidate_evidence",
+    description=(
+        "Read one candidate's research evidence as stable references + "
+        "readiness + gaps: theme/sleeve mapping, status, thesis note location, "
+        "supporting source IDs, stale-source flags, promotion-required state, "
+        "and the gaps blocking DCA vs one-time eligibility. Read-only."
+    ),
+)
+def candidate_evidence(*, ticker: str, theme_key: Optional[str] = None) -> dict:
+    instrument = _store.get_instrument(ticker)
+    if instrument is None:
+        raise LookupError(f"no instrument with ticker {ticker!r}")
+
+    themes = _store.list_themes_for_ticker(ticker)
+    if theme_key is not None:
+        themes = [t for t in themes if t["theme_key"] == theme_key]
+
+    # Supporting sources: instrument-scoped links plus theme-scoped links for
+    # every theme this candidate expresses. Only active (non-superseded) links
+    # count as supporting evidence.
+    due = {
+        (d["scope"], d["key"], d["source_id"])
+        for d in _store.sources_due_for_review(as_of=_now())
+    }
+    supporting: dict[int, None] = {}
+    stale: dict[int, None] = {}
+    scopes = [("instrument", ticker)] + [("theme", t["theme_key"]) for t in themes]
+    for scope, key in scopes:
+        for link in _store.list_source_links(scope=scope, key=key):
+            if link["status"] != "active":
+                continue
+            sid = link["source_id"]
+            supporting[sid] = None
+            if (scope, key, sid) in due:
+                stale[sid] = None
+
+    # Thesis note: the instrument's own note is the dossier; fall back to a
+    # theme note (broad-market ETFs lean on the theme/sleeve thesis).
+    thesis_note_path = instrument.get("note_path")
+    if not thesis_note_path:
+        for t in themes:
+            if t.get("theme_note_path"):
+                thesis_note_path = t["theme_note_path"]
+                break
+
+    promotion_required = not _strategy_has_eligible(ticker)
+    has_fundamentals = _store.has_rows(
+        "fin_fundamentals", where="ticker = ?", params=(ticker,)
+    )
+
+    gaps = _candidate_gaps(
+        instrument_role=instrument["instrument_role"],
+        has_thesis=bool(thesis_note_path),
+        has_citations=bool(supporting),
+        has_stale=bool(stale),
+        promotion_required=promotion_required,
+        has_fundamentals=has_fundamentals,
+    )
+
+    research_status = None
+    if themes:
+        research_status = max(
+            (t["status"] for t in themes),
+            key=lambda s: _STATUS_RANK.get(s, -1),
+        )
+
+    return {
+        "ticker": ticker,
+        "instrument": {
+            "ticker": instrument["ticker"],
+            "type": instrument["type"],
+            "instrument_role": instrument["instrument_role"],
+            "display_name": instrument.get("display_name"),
+            "note_path": instrument.get("note_path"),
+        },
+        "themes": [
+            {
+                "theme_key": t["theme_key"],
+                "status": t["status"],
+                "role": t.get("role"),
+                "conviction": t.get("conviction"),
+                "theme_note_path": t.get("theme_note_path"),
+            }
+            for t in themes
+        ],
+        "research_status": research_status,
+        "thesis_note_path": thesis_note_path,
+        "supporting_source_ids": sorted(supporting),
+        "stale_source_ids": sorted(stale),
+        "promotion_required": promotion_required,
+        "readiness": {
+            "dca": not gaps["dca"],
+            "one_time": not gaps["one_time"],
+        },
+        "gaps": gaps,
+    }
+
+
+def _priority(gap: str, **extra) -> dict:
+    return {"gap": gap, "severity": _GAP_SEVERITY.get(gap, 0), **extra}
+
+
+@tool(
+    name="finance.research_priorities",
+    description=(
+        "Gap scan over current stored facts (strategy, candidates, notes/"
+        "sources, market data, fundamentals, snapshot, recent plans), ranked "
+        "by deployment-blocking impact. Degrades gracefully when downstream "
+        "tables are still empty. Read-only."
+    ),
+)
+def research_priorities() -> dict:
+    as_of = _now()
+    priorities: list[dict] = []
+
+    # Global deployment-blocking gaps — reported (not raised) when the
+    # downstream tables are absent or empty.
+    if not _store.has_rows("fin_strategy_eligible_instruments"):
+        priorities.append(
+            _priority(
+                "NO_ACTIVE_STRATEGY",
+                detail="no active strategy version; candidates cannot be funded "
+                "until promoted",
+            )
+        )
+    if not _store.has_rows("fin_portfolio_snapshots"):
+        priorities.append(
+            _priority(
+                "NO_PORTFOLIO_SNAPSHOT",
+                detail="no imported portfolio snapshot; weight impact unknown",
+            )
+        )
+    if not _store.has_rows("fin_deployment_plans"):
+        priorities.append(
+            _priority("NO_RECENT_PLANS", detail="no deployment plans yet")
+        )
+
+    # Per-candidate evidence gaps (rejected candidates are out of scope).
+    for cand in _store.list_candidates(include_rejected=False):
+        ev = candidate_evidence(ticker=cand["ticker"], theme_key=cand["theme_key"])
+        if not _store.has_rows(
+            "fin_price_bars", where="ticker = ?", params=(cand["ticker"],)
+        ):
+            priorities.append(
+                _priority(
+                    "NO_PRICE_DATA",
+                    ticker=cand["ticker"],
+                    theme_key=cand["theme_key"],
+                    detail="no stored price bars",
+                )
+            )
+        for gap in ev["gaps"]["one_time"]:
+            blocks = ["one_time"]
+            if gap in ev["gaps"]["dca"]:
+                blocks.append("dca")
+            priorities.append(
+                _priority(
+                    gap,
+                    ticker=cand["ticker"],
+                    theme_key=cand["theme_key"],
+                    blocks=blocks,
+                )
+            )
+
+    priorities.sort(
+        key=lambda p: (-p["severity"], p.get("ticker") or "", p["gap"])
+    )
+    return {"as_of": as_of, "priorities": priorities}

@@ -507,3 +507,64 @@ def get_source_by_id(source_id: int) -> Optional[dict]:
             "SELECT * FROM fin_research_sources WHERE id = ?", (source_id,)
         ).fetchone()
     return _row_to_dict(row) if row is not None else None
+
+
+# ---------------------------------------------------------------------------
+# read-contract helpers (candidate_evidence / research_priorities)
+# ---------------------------------------------------------------------------
+
+
+def list_themes_for_ticker(ticker: str) -> list[dict]:
+    """Theme edges a ticker maps to, carrying the theme's own note path."""
+    with connection.connect() as conn:
+        rows = conn.execute(
+            "SELECT ti.theme_key, ti.status, ti.role, ti.conviction, "
+            "       ti.conviction_note, ti.note, t.note_path AS theme_note_path "
+            "FROM fin_theme_instruments AS ti "
+            "JOIN fin_themes AS t ON t.key = ti.theme_key "
+            "WHERE ti.ticker = ? "
+            "ORDER BY ti.theme_key",
+            (ticker,),
+        ).fetchall()
+    return [_row_to_dict(r) for r in rows]
+
+
+def list_candidates(*, include_rejected: bool = False) -> list[dict]:
+    """Every theme-instrument candidate edge with its instrument facts."""
+    sql = (
+        "SELECT ti.theme_key, ti.ticker, ti.status, ti.role, ti.conviction, "
+        "       i.type, i.instrument_role, i.display_name, i.note_path "
+        "FROM fin_theme_instruments AS ti "
+        "JOIN fin_instruments AS i ON i.ticker = ti.ticker "
+    )
+    if not include_rejected:
+        sql += "WHERE ti.status != 'rejected' "
+    sql += "ORDER BY ti.ticker, ti.theme_key"
+    with connection.connect() as conn:
+        rows = conn.execute(sql).fetchall()
+    return [_row_to_dict(r) for r in rows]
+
+
+def table_exists(name: str) -> bool:
+    with connection.connect() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+            (name,),
+        ).fetchone()
+    return row is not None
+
+
+def has_rows(table: str, *, where: str = "", params: tuple = ()) -> bool:
+    """True if ``table`` exists and holds at least one matching row.
+
+    Degrades gracefully: an absent downstream table reads as "no rows"
+    rather than raising, so the gap scan reports it instead of erroring.
+    """
+    if not table_exists(table):
+        return False
+    sql = f"SELECT 1 FROM {table}"
+    if where:
+        sql += f" WHERE {where}"
+    sql += " LIMIT 1"
+    with connection.connect() as conn:
+        return conn.execute(sql, params).fetchone() is not None
