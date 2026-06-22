@@ -1,4 +1,8 @@
-"""Thin SQLite store for finance-hub."""
+"""Thin SQLite store for finance-hub.
+
+Every connection enables `PRAGMA foreign_keys = ON` so FK and CHECK
+violations fail loudly rather than silently corrupting state.
+"""
 from __future__ import annotations
 
 import os
@@ -7,23 +11,20 @@ from pathlib import Path
 
 DB_PATH = Path(os.environ.get("FINANCE_HUB_DB", Path.cwd() / "finance-hub.db"))
 
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS fin_schema_migrations (
-    version TEXT PRIMARY KEY,
-    applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-"""
-
 
 def connect() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
 def init() -> None:
-    with connect() as conn:
-        conn.executescript(_SCHEMA)
+    """Apply finance-owned migrations against the configured DB."""
+    # Imported lazily to avoid a circular import at module load.
+    from finance_hub.store import migrations
+
+    migrations.run()
 
 
 def status() -> dict:
