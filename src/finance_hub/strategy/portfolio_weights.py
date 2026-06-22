@@ -58,7 +58,7 @@ class PortfolioWeightResult:
 
 
 def compute_portfolio_weights(positions: Sequence[PositionInput]) -> PortfolioWeightResult:
-    counted: list[PositionInput] = []
+    valued: list[tuple[PositionInput, int]] = []
     warnings: list[WeightWarning] = []
 
     for p in positions:
@@ -74,17 +74,17 @@ def compute_portfolio_weights(positions: Sequence[PositionInput]) -> PortfolioWe
                 )
             )
             continue
-        counted.append(p)
+        valued.append((p, p.market_value_micros))
 
-    total = sum(p.market_value_micros for p in counted)  # type: ignore[misc]
+    total = sum(mv for _, mv in valued)
     weights = [
         PositionWeight(
             ticker=p.ticker,
-            market_value_micros=p.market_value_micros,  # type: ignore[arg-type]
-            weight=(p.market_value_micros / total) if total else 0.0,  # type: ignore[operator]
+            market_value_micros=mv,
+            weight=(mv / total) if total else 0.0,
             is_eligible_for_buy=p.is_supported,
         )
-        for p in counted
+        for p, mv in valued
     ]
     return PortfolioWeightResult(
         total_value_micros=total,

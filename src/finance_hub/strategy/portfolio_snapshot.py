@@ -88,7 +88,7 @@ def _normalize_asset_type(raw: str) -> str:
     return _FIDELITY_TYPE_MAP.get(raw, raw or "unknown")
 
 
-def _clean_money(raw: str) -> Optional[str]:
+def _clean_money(raw: Optional[str]) -> Optional[str]:
     """Strip Fidelity's ``$`` and thousands separators; empty → None."""
     if raw is None:
         return None
@@ -98,7 +98,7 @@ def _clean_money(raw: str) -> Optional[str]:
     return s
 
 
-def _money_to_micros(raw: str) -> Optional[int]:
+def _money_to_micros(raw: Optional[str]) -> Optional[int]:
     cleaned = _clean_money(raw)
     if cleaned is None:
         return None
@@ -131,14 +131,14 @@ def _parse_row(row: dict[str, str]) -> Optional[_ParsedPosition]:
     asset_type = _normalize_asset_type(row.get("Type") or "")
     quantity_raw = (row.get("Quantity") or "").strip()
     quantity = quantity_raw or None
-    market_value_micros = _money_to_micros(row.get("Current Value") or "")
-    cost_basis_micros = _money_to_micros(row.get("Cost Basis Total") or "")
+    current_value_raw = row.get("Current Value")
+    cost_basis_raw = row.get("Cost Basis Total")
+    market_value_micros = _money_to_micros(current_value_raw)
+    cost_basis_micros = _money_to_micros(cost_basis_raw)
 
     is_cash = asset_type == "cash"
     cash_value_micros = market_value_micros if is_cash else None
     if is_cash:
-        # Cash rows carry value in ``cash_value`` and are intentionally
-        # excluded from ``market_value`` weight math.
         market_value_micros = None
 
     is_supported = (
@@ -152,8 +152,8 @@ def _parse_row(row: dict[str, str]) -> Optional[_ParsedPosition]:
         account_name,
         ticker_raw,
         quantity_raw,
-        row.get("Current Value") or "",
-        row.get("Cost Basis Total") or "",
+        current_value_raw or "",
+        cost_basis_raw or "",
     )
     return _ParsedPosition(
         account_name=account_name,
