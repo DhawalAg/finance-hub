@@ -545,7 +545,7 @@ def list_candidates(*, include_rejected: bool = False) -> list[dict]:
     return [_row_to_dict(r) for r in rows]
 
 
-def table_exists(name: str) -> bool:
+def _table_exists(name: str) -> bool:
     with connection.connect() as conn:
         row = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
@@ -560,7 +560,7 @@ def has_rows(table: str, *, where: str = "", params: tuple = ()) -> bool:
     Degrades gracefully: an absent downstream table reads as "no rows"
     rather than raising, so the gap scan reports it instead of erroring.
     """
-    if not table_exists(table):
+    if not _table_exists(table):
         return False
     sql = f"SELECT 1 FROM {table}"
     if where:

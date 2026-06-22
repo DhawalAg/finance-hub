@@ -488,17 +488,17 @@ def candidate_evidence(*, ticker: str, theme_key: Optional[str] = None) -> dict:
         (d["scope"], d["key"], d["source_id"])
         for d in _store.sources_due_for_review(as_of=_now())
     }
-    supporting: dict[int, None] = {}
-    stale: dict[int, None] = {}
+    supporting: set[int] = set()
+    stale: set[int] = set()
     scopes = [("instrument", ticker)] + [("theme", t["theme_key"]) for t in themes]
     for scope, key in scopes:
         for link in _store.list_source_links(scope=scope, key=key):
             if link["status"] != "active":
                 continue
             sid = link["source_id"]
-            supporting[sid] = None
+            supporting.add(sid)
             if (scope, key, sid) in due:
-                stale[sid] = None
+                stale.add(sid)
 
     # Thesis note: the instrument's own note is the dossier; fall back to a
     # theme note (broad-market ETFs lean on the theme/sleeve thesis).
