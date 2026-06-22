@@ -168,6 +168,39 @@ MIGRATIONS: list[tuple[int, str]] = [
             ON fin_fundamentals (ticker, field);
         """,
     ),
+    (
+        5,
+        """
+        CREATE TABLE fin_portfolio_snapshots (
+            snapshot_id    TEXT PRIMARY KEY,
+            as_of          TEXT NOT NULL,
+            source_adapter TEXT NOT NULL,
+            source_file    TEXT NOT NULL,
+            created_at     TEXT NOT NULL
+        );
+
+        CREATE TABLE fin_portfolio_positions (
+            position_id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            snapshot_id          TEXT NOT NULL REFERENCES fin_portfolio_snapshots(snapshot_id),
+            account_name         TEXT NOT NULL,
+            account_type         TEXT NOT NULL,
+            ticker               TEXT,
+            name                 TEXT,
+            asset_type           TEXT NOT NULL,
+            quantity             TEXT,
+            market_value_micros  INTEGER,
+            cost_basis_micros    INTEGER,
+            cash_value_micros    INTEGER,
+            currency             TEXT NOT NULL,
+            is_supported         INTEGER NOT NULL CHECK (is_supported IN (0, 1)),
+            source_row_hash      TEXT NOT NULL,
+            UNIQUE (snapshot_id, source_row_hash)
+        );
+
+        CREATE INDEX idx_fin_portfolio_positions_snapshot
+            ON fin_portfolio_positions(snapshot_id);
+        """,
+    ),
 ]
 
 
