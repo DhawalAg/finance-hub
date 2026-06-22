@@ -10,8 +10,10 @@ and an MCP server for agents. The domain is now finance only.
 
 ```text
 src/finance_hub/        installable Python package
-docs/requests/finance/  request-scoped specs, plans, and generated design docs
-notes/finance-corpus/   supporting finance source notes and raw intake
+docs/requests/finance/  durable finance specs and request-scoped plans
+docs/notes/finance-corpus/   supporting finance source notes and raw intake
+CONTEXT.md              domain glossary and current build map
+docs/adr/               architecture decisions
 ```
 
 ## Commands
