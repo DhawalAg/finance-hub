@@ -249,7 +249,7 @@ planner strategy state; discovery never silently changes the buyable universe. O
 the active ingestion slice produces reconciled `historical_surplus` evidence; a later composition
 layer turns that into planner-ready `deployable_capital`:
 
-→ **[finance/research/spec.md](../../../docs/requests/finance/research/spec.md)** (open questions
+→ **[finance/research/spec.md](../../../requests/finance/research/spec.md)** (open questions
 R1–R15 to sharpen as we build).
 
 Like the planner, the qualitative lens is fully buildable today on agent + persistence; every

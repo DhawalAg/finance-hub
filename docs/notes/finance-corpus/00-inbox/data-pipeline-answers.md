@@ -8,7 +8,7 @@ Status: living back-and-forth — companion to [data-pipeline-spec.md](./data-pi
 > checks, missed-run backfill, observability/alerting, retention — is **Slice-2+ (price snapshots)** and is
 > **not to be built until the price-snapshot slice is active.** It informs the seam (so the architecture
 > doesn't block it); it is *not* a build checklist. The active ingestion work is the budget slice, specced in
-> [`docs/requests/finance/ingestion/spec.md`](../../../docs/requests/finance/ingestion/spec.md).
+> [`docs/requests/finance/ingestion/spec.md`](../../../requests/finance/ingestion/spec.md).
 
 Working doc where we resolve the A–F open questions one at a time. Each item records:
 **your call**, **my recommendation + why**, and the **resulting decision / todo**. Decisions
