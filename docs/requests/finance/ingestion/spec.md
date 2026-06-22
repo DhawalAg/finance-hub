@@ -1,11 +1,17 @@
 # Finance Ingestion — Slice 1 Spec
 
-**Status:** Implementation-ready
-**Updated:** 2026-05-31
+**Status:** Implementation-ready, but parked for deployment-recommendation v1
+**Updated:** 2026-06-21
 **Home package:** `src/finance_hub/`
 
 This is the authoritative implementation contract for Slice 1. Decision history lives in
 [`working-doc.md`](./working-doc.md). Holdings, prices, and scheduled acquisition remain deferred.
+
+For the current finance v1 release, this slice is supporting/future work rather than part of the
+critical path. V1 deployment recommendations use explicit user-supplied `deployable_cash`; ingestion
+produces `historical_surplus` evidence that a later capital-policy layer may combine with liquidity,
+reserves, obligations, and explicit overrides. Do not treat `historical_surplus`,
+`buffered_historical_surplus_cents`, or `planner_capital_cents` as deployable cash for v1.
 
 ---
 
@@ -630,9 +636,9 @@ daily-bar / price-envelope read contract.
 
 Useful background remains in:
 
-- [`notes/finance-corpus/00-inbox/data-pipeline-spec.md`](../../../../notes/finance-corpus/00-inbox/data-pipeline-spec.md)
-- [`notes/finance-corpus/00-inbox/data-pipeline-answers.md`](../../../../notes/finance-corpus/00-inbox/data-pipeline-answers.md)
-- [`notes/finance-corpus/00-inbox/requirements-dump.md`](../../../../notes/finance-corpus/00-inbox/requirements-dump.md)
+- [`docs/notes/finance-corpus/00-inbox/data-pipeline-spec.md`](../../../notes/finance-corpus/00-inbox/data-pipeline-spec.md)
+- [`docs/notes/finance-corpus/00-inbox/data-pipeline-answers.md`](../../../notes/finance-corpus/00-inbox/data-pipeline-answers.md)
+- [`docs/notes/finance-corpus/00-inbox/requirements-dump.md`](../../../notes/finance-corpus/00-inbox/requirements-dump.md)
 
 Reference parsing logic remains in `../finance-hub/scripts/import_chase.py` and
 `../finance-hub/scripts/import_fidelity.py`. Reuse parsing ideas; do not inherit the Beancount

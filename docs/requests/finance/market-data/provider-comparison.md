@@ -1,7 +1,7 @@
 # Finance Market Data Provider Comparison — Working Note
 
-**Status:** Working comparison for D3 / D4 sharpening
-**Updated:** 2026-06-04
+**Status:** D3 / D4 resolved for v1; first free fundamentals adapter selected
+**Updated:** 2026-06-21
 **Owner spec:** [acquisition](./acquisition.md)
 
 This note compares stock-market data providers for two different jobs:
@@ -21,14 +21,23 @@ the best fundamentals provider.
 For build-now:
 
 - Keep **yfinance** as the first free `PriceProvider.fetch_daily_bars(...)` implementation.
+- Use **EODHD** as the first free `FundamentalsProvider` implementation for the compact v1 stock +
+  ETF evidence pack.
+- Use **Alpha Vantage** as the fallback runner once EODHD's 20-request/day free tier is exhausted.
+- Use **SEC / edgartools** as the filing-grounded verification path for thesis-critical stock
+  fundamentals.
 - Refresh the active universe **at least daily** once the snapshot loop exists.
 - Store normalized daily OHLCV in `fin_price_bars`.
-- Keep fundamentals out of v1 provider work unless a research workflow triggers them.
+- Include a compact fundamentals workflow in v1 because one-time-buy eligibility depends on it.
+  CSV/manual intake remains an override and bootstrap path, not the primary planned workflow.
 
 For provider escalation:
 
-- Do **not** treat FMP as the automatic paid default.
-- Run a small provider bakeoff before committing to a paid integration.
+- Do **not** treat FMP, EODHD, Polygon / Massive, or any other provider as the automatic paid default.
+- Start with EODHD so the product can be used and sharpened on the free tier before paying for a
+  broader feed.
+- Run a small provider bakeoff before replacing EODHD with Alpha Vantage as the fallback or with a
+  paid fundamentals integration.
 - Evaluate price-data providers and fundamentals providers separately.
 - Use SEC / edgartools or another filing-grounded source for decision-grade fundamentals; treat
   aggregator fundamentals as screening unless validated against filings.
@@ -97,11 +106,16 @@ Use these separately:
 |---|---|---|---|---|
 | **yfinance** | Free v1 daily bars | Easy Python integration; supports multi-ticker downloads, daily intervals, raw/unadjusted mode, actions option | Unofficial Yahoo access; reliability can break; not a fundamentals source of truth | Use first for Slice A/B; monitor failures |
 | **Polygon / Massive** | Paid price-data upgrade | Strong OHLC aggregate API; clear stocks tiers; supports adjusted/unadjusted aggregates; good if we need more reliable historical bars | More price-feed oriented than fundamentals-oriented; cost rises with history/real-time needs | Strong price-data fallback if yfinance fails |
-| **Alpha Vantage** | Low-cost broad fallback | Daily OHLCV, adjusted daily, fundamentals, economic data; free tier exists; premium starts at published request/min tiers | Free tier is small; output limits; fundamentals quality still needs validation | Good cheap fallback, not first fundamentals truth |
-| **FMP** | Broad screening bundle | One API for prices, statements, profiles, estimates, transcripts, calendars, news; inexpensive relative to enterprise vendors | Reddit sentiment is mixed; fundamentals should not be decision-grade without validation; pricing/tier churn risk | Candidate for screening/events, not automatic default |
+| **EODHD** | First free compact fundamentals provider | Free tier exists; stock fundamentals and ETF fundamentals line up with the v1 compact evidence pack; 20 requests/day is enough to start | Free tier is small; missing fields and stale values must be expected; fundamentals quality still needs validation; screening-grade only | Default runner until the daily cap is consumed |
+| **Alpha Vantage** | Fallback compact fundamentals provider | Free tier exists; company overview, normalized financial statements, earnings, estimates, listing status, and ETF profile / holdings / allocation endpoints map to the v1 compact evidence pack | Free tier is small; missing fields and stale values must be expected; fundamentals quality still needs validation; screening-grade only | Fallback once EODHD limits are hit |
+| **FMP** | Paid fundamentals / events upgrade | Broad stock metrics, ratios, enterprise values, growth, estimates, calendars, SEC filing links, bulk endpoints, ETF and mutual-fund endpoints | ETF holdings may require a higher tier; fundamentals should not be decision-grade without validation; pricing/tier churn risk | First serious paid alternative if Alpha Vantage blocks normal use |
 | **Tiingo** | Price data and possible fundamentals alternative | Market reputation for EOD price data; Reddit users mention moving from FMP to Tiingo for fundamentals | Official docs/pricing need direct verification before selection; fundamentals offering may require sales/beta access depending plan | Investigate before paid choice |
 | **Intrinio** | Higher-quality paid fundamentals / enterprise data | Official docs advertise fundamentals, market data, options, sourcing/cleaning; pricing page shows EOD adjusted/unadjusted OHLCV and business-use licensing | Much more expensive than hobby APIs; likely overkill until workflow proves value | Serious later candidate, not v1 |
-| **EODHD** | Broad low/mid-cost bundle | Covers EOD, live OHLCV, fundamentals, corporate events, indices, broad exchange coverage | Reddit has recent anecdotes about historical gaps; must validate with our tickers before trust | Candidate to test, not assume |
+| **EODHD** | Paid stock + ETF fundamentals alternative | Covers EOD, live OHLCV, stock fundamentals, ETF fundamentals, corporate events, indices, and broad exchange coverage; ETF docs map well to expense / holdings / exposure eligibility | Paid; Reddit has recent anecdotes about historical gaps; must validate with our tickers before trust | Paid alternative if the free tier no longer carries the workflow |
+| **Finnhub** | Broad secondary fundamentals / news / sentiment candidate | Market news, sentiment, fundamentals, and crypto coverage in one API | Free tier is limited and the bundle is broader than the compact v1 need | Keep on the shortlist if we want more non-price context later |
+| **Alpaca Markets** | Trading API with market data and paper trading | Free access for data + trading API, paper trading path | Oriented around execution, not compact fundamentals | Useful if we later want a live brokerage-adjacent path |
+| **Mboum API** | Time series / technical indicators candidate | Free tier available; inexpensive entry point for bar data and indicators | More technical-analysis oriented than fundamentals-oriented | Niche backup for indicator-heavy workflows |
+| **SteadyAPI** | Time series / technical indicators candidate | Free tier available; low-cost option for price/indicator access | Smaller ecosystem; not the first choice for fundamentals | Niche backup for indicator-heavy workflows |
 | **Xfinlink** | Research-grade fundamentals / entity resolution | Docs expose prices, fundamentals, metrics, ticker resolution, historical constituents; explicitly documents price adjustment semantics and caveats | Newer/smaller provider; terms say data may be inaccurate/as-is; needs bakeoff | High-interest fundamentals candidate |
 | **edgartools / SEC** | Filing-grounded fundamentals | Free; directly tied to SEC filings / Company Facts; useful for decision-grade checks and source-audited extraction | Not ideal for large bulk screening; XBRL/filing complexity still requires careful mapping | Use for ground truth when activated |
 
@@ -110,6 +124,10 @@ Use these separately:
 ## Recommended Bakeoff
 
 Do not pick the paid provider from marketing pages. Test with a small, ugly benchmark set.
+
+The first v1 adapter can start with Alpha Vantage so the product can be used before committing to a
+paid feed. The bakeoff becomes an upgrade gate: run it before replacing EODHD/Alpha Vantage with FMP
+or another paid fundamentals provider.
 
 ### Price-Data Bakeoff
 
@@ -143,12 +161,16 @@ Checks:
 Candidate providers:
 
 - edgartools / SEC Company Facts
-- Xfinlink
+- EODHD baseline
+- Alpha Vantage fallback
 - FMP
-- EODHD
-- Alpha Vantage
+- Xfinlink
 - Intrinio, if cost is justified
 - Tiingo, if fundamentals access is clear
+- Finnhub, if we want a broader secondary bundle
+- Alpaca Markets, if a trading-adjacent API becomes desirable
+- Mboum API, if indicator-heavy workflows become important
+- SteadyAPI, if a low-cost technical indicator backup is useful
 
 Test companies:
 
@@ -171,6 +193,28 @@ Checks:
 - Ticker/entity resolution.
 - Agreement against latest 10-K / 10-Q for thesis-critical fields.
 
+V1 EODHD smoke test:
+
+- Providers: EODHD plus SEC/edgartools for filing-grounded spot checks, with Alpha Vantage used as
+  a comparison baseline when EODHD hits its free cap.
+- Tickers: AAPL, MSFT, NVDA, JPM or BAC, AMZN or GOOGL, and SPY or QQQ for ETF handling.
+- Fields: revenue growth, margin/profitability, P/S or forward P/S, EV/EBITDA when available,
+  debt/cash, next earnings date, source/as_of, and filing/source link when available.
+- Outcome: confirm EODHD can power the first compact screening pack, with unavailable fields
+  represented as explicit gaps rather than agent-filled numbers, and confirm Alpha Vantage can take
+  over once EODHD's daily cap is exhausted.
+
+Paid fundamentals upgrade triggers:
+
+- EODHD's free rate limit blocks normal usage.
+- `ETF_PROFILE` lacks fields needed for ETF eligibility.
+- Stock fundamentals miss too many valuation fields.
+- Manual fundamentals gaps become common enough to slow product iteration.
+
+When any trigger fires, compare FMP and EODHD first. FMP is the broader paid bundle candidate; EODHD
+is the cleaner stock + ETF fundamentals candidate. Keep SEC/edgartools as the decision-grade check
+path either way.
+
 ---
 
 ## D3 / D4 Implication
@@ -179,9 +223,10 @@ Checks:
 
 ```text
 Start free with yfinance.
-Move to a paid price provider only if daily refresh has >10% missing/error bars over 2 weeks,
-or if analytics/backfill needs exceed yfinance reliability.
-Choose the paid provider via the price-data bakeoff, not by defaulting to FMP.
+Move to Polygon / Massive or another paid price provider only if daily-bar fetches fail often,
+adjusted/unadjusted semantics become hard to trust, analytics/backfill needs exceed yfinance
+reliability, or the workflow needs intraday / production-grade market data. Choose the paid provider
+via the price-data bakeoff, not by defaulting to a fundamentals provider.
 ```
 
 **D4 snapshot universe:** provider choice depends on the refresh universe.

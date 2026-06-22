@@ -1,7 +1,8 @@
 # Finance Market Data — Subsystem Overview
 
-**Status:** Split into two sub-specs; acquisition is the active build, analytics is design-ahead
-**Updated:** 2026-06-04
+**Status:** Split into two sub-specs; acquisition and near-term analytics are being sharpened for the
+deployment-recommendation workflow
+**Updated:** 2026-06-21
 **Home package:** `src/finance_hub/`
 
 This is the index for the market-data subsystem. It does two distinct jobs, now specced separately so
@@ -13,15 +14,15 @@ the active contract stays lean while the deferred half evolves on its own:
   operational logging — and is **where the build-now line is drawn** (lead decision, now drawn: line
   at B, reviewed at A).
 - **[Analytics](./analytics.md)** — turn those stored facts into derived metrics, portfolio/theme
-  aggregates, cross-sectional screens, event-response measures, and simulation (L2–L6). **Design-ahead
-  and fully build-gated.** Owns `fin_metrics`, the metric taxonomy, and the scripts / notebooks /
-  dashboards surfaces.
+  aggregates, cross-sectional screens, event-response measures, and simulation (L2–L6). **The v1
+  deployment evidence subset is active; deeper analytics remain gated.** Owns `fin_metrics`, the
+  metric taxonomy, and the scripts / notebooks / dashboards surfaces.
 
 Decision history and the provider comparison remain in:
 
-- [`data-pipeline-spec.md`](../../../../notes/finance-corpus/00-inbox/data-pipeline-spec.md)
-- [`data-pipeline-answers.md`](../../../../notes/finance-corpus/00-inbox/data-pipeline-answers.md)
-- [`data-source-comparison.md`](../../../../notes/finance-corpus/00-inbox/data-source-comparison.md)
+- [`data-pipeline-spec.md`](../../../notes/finance-corpus/00-inbox/data-pipeline-spec.md)
+- [`data-pipeline-answers.md`](../../../notes/finance-corpus/00-inbox/data-pipeline-answers.md)
+- [`data-source-comparison.md`](../../../notes/finance-corpus/00-inbox/data-source-comparison.md)
 - [`provider-comparison.md`](./provider-comparison.md)
 
 ---
@@ -30,8 +31,9 @@ Decision history and the provider comparison remain in:
 
 *Every number traces to imported data or a deterministic tool result, never model freehand.*
 Acquisition produces the imported data; analytics produces the tool results. The agent narrates and
-explores; it never invents a price or a metric. Market data is a **shared subsystem, not a user
-workflow** — the planner and research read narrow seams; the agent is the only frontend.
+explores; it never invents a price, metric, or fundamental. Market data is a **shared evidence
+subsystem, not a user workflow** — the planner and research read narrow seams; the agent is the only
+frontend.
 
 ---
 
@@ -47,18 +49,18 @@ sub-specs detail their own layers and do not redraw it.
  L5  Event-response analytics     earnings reaction, [-5,+5] return, drift          ── deferred    │ ANALYTICS
  L4  Cross-sectional analytics    rank/screen/compare players within a theme        ── deferred    │ (analytics.md)
  L3  Aggregated metrics           sleeve & portfolio rollups, drift, concentration  ── deferred    │
- L2  Derived metrics              returns, vol, drawdown, momentum (per instrument) ── deferred    ┘
+ L2  Derived metrics              v1 evidence pack now; broader taxonomy later      ── active/v1   ┘
  ── seam: fin_price_bars ──────────────────────────────────────────────────────────────────────────
- L1  Stored observations          fin_price_bars (daily OHLCV + refreshed adj)      ── active      ┐ ACQUISITION
- L0  Providers (acquisition)      PriceProvider.fetch_daily_bars → yfinance | FMP   ── active      ┘ (acquisition.md)
+ L1  Stored observations          bars + compact fundamentals screening cache       ── active/v1   ┐ ACQUISITION
+ L0  Providers (acquisition)      PriceProvider + selected FundamentalsProvider     ── active/v1   ┘ (acquisition.md)
         ▲ external world (Yahoo, FMP, SEC EDGAR, …)
 ```
 
 | L | Layer | Owns | Reads | Spec | Status |
 |---|---|---|---|---|---|
 | **L0** | Providers | adapters, config, secrets, cache, retry, fetch log, provenance | external APIs | acquisition | **active** |
-| **L1** | Stored observations | `fin_price_bars` daily OHLCV (+ later a fundamentals / corp-actions cache) | L0 | acquisition | **active** |
-| **L2** | Derived metrics | `fin_metrics` per-instrument: return, vol, drawdown, momentum | L1 | analytics | deferred |
+| **L1** | Stored observations | `fin_price_bars` daily OHLCV plus compact `fin_fundamentals` screening cache; later corp-actions cache | L0 | acquisition | **active/v1** |
+| **L2** | Derived metrics | `fin_metrics` per-instrument: v1 return/risk/drawdown/52-week/benchmark evidence now; broader taxonomy later | L1 | analytics | **active/v1 subset** |
 | **L3** | Aggregated metrics | sleeve / theme / portfolio rollups | L1, L2 + holdings/strategy | analytics | deferred |
 | **L4** | Cross-sectional | screens, rankings, peer comparisons within a theme | L1, L2 | analytics | deferred |
 | **L5** | Event-response | earnings/dividend reaction joined to bars | L1 + `fin_events` (research) | analytics | deferred |
@@ -77,9 +79,9 @@ consumes it. No decision is duplicated across the two docs.
 
 ## Why split
 
-- **Different lifecycles.** Acquisition is being built now (current closing price); every analytics
-  layer is deferred behind a trigger. Mixing a live contract with an all-deferred catalogue blurs what
-  is actually being built.
+- **Different lifecycles.** Acquisition and the small v1 metric pack are being built now for deployment
+  recommendations; broader analytics remain behind triggers. Mixing the live evidence contract with
+  the deferred catalogue blurs what is actually being built.
 - **Different concerns.** Acquisition is ops-flavored (adapters, secrets, retries, rate limits,
   operational logging). Analytics is compute-flavored (metric math, surfaces, dependency stack).
 - **Different dependency footprint.** Acquisition runs light; analytics pulls the heavy
@@ -90,10 +92,11 @@ the `close`/`adj_close` decision in exactly one place each (here and in acquisit
 
 ## The build line (drawn)
 
-Drawn 2026-05-31 in **[acquisition §5](./acquisition.md)**: the first-push line sits at **B** (the
-`finance.snapshot()` loop), reviewed at **A** (on-demand closing price). The axes were also reframed —
-**A→B is the near-term spine** (A is the review checkpoint; B is the next slice and where "see what
-shifts" begins), while **Automate** (scheduling) and **Analyze** (metrics, in
-[analytics](./analytics.md)) are **parallel later gates** behind their own triggers. Note the headline
-"what shifted" metric — allocation drift — is gated on holdings/strategy *outside* this subsystem, so it
-can't appear on day one.
+Drawn 2026-05-31 in **[acquisition §5](./acquisition.md)** and narrowed for the 2026-06-21 deployment
+recommendation workflow: the first-push acquisition line sits at **B** (the `finance.snapshot()` loop),
+reviewed at **A** (on-demand closing price). The v1 planner also pulls forward a small L2 evidence
+pack from [analytics](./analytics.md): 1m/3m/6m/1y returns, volatility, max drawdown, current drawdown,
+52-week-position context, and benchmark context defaulting to `SPY`, computed from the stored
+`fin_price_bars` series and stored in `fin_metrics`. Broader **Analyze** work, scheduling, screens,
+event-response analytics, simulation, and allocation drift beyond planner-owned weight impact remain
+behind their own triggers.

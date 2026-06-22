@@ -1,18 +1,20 @@
 # Finance Market Data — Analytics Spec
 
-**Status:** Design-ahead; fully build-gated behind the acquisition build line
-**Updated:** 2026-06-04
+**Status:** Design-ahead overall; near-term metrics are being pulled forward for deployment
+recommendations
+**Updated:** 2026-06-21
 **Home package:** `src/finance_hub/`
 
 The analytics half of the [market-data subsystem](./spec.md): turn the stored daily bars into derived
 metrics, portfolio/theme aggregates, cross-sectional screens, event-response measures, and simulation
-(L2–L6). This spec is a **map, not a build list** — every layer here is deferred until a real workflow
-triggers it, and the first one cannot start until the [acquisition](./acquisition.md) build line (its
-§5) puts a bar series on the ground. It reads `fin_price_bars`; it never reaches back to a provider.
+(L2–L6). This spec is a **map, not a complete build list**. The deployment-recommendation workflow now
+pulls a small L2/L3 subset forward; deeper screens, event-response analytics, dashboards, and
+simulation remain gated. It reads `fin_price_bars`; it never reaches back to a provider.
 
 > **What "design-ahead" buys.** Each layer below slots into a slot that already exists in its consumer:
 > the research `instrument_brief` / `theme_brief` carry optional `metrics` / `fundamentals` slots with
-> availability metadata ([research §9](../research/spec.md)); the planner reads `PriceEnvelope`s from
+> availability metadata
+> ([research quantitative integration](../research/spec.md#8-quantitative-integration)); the planner reads `PriceEnvelope`s from
 > `finance.prices(...)`. When a layer activates, it *fills a slot* — it does not reshape its consumer.
 > That is the whole point of writing this before building it.
 
@@ -40,6 +42,20 @@ It does **not** own daily-bar acquisition, the `close`/`adj_close` decision, or 
 
 The catalogue of what can be computed, by layer. **A map of what's possible, gated on real need.**
 
+For the first deployment-recommendation workflow, the minimum candidate evidence pack pulls forward a
+small L2 subset over **1 year of daily history when available**: 1m, 3m, 6m, and 1y returns;
+volatility; max drawdown; current drawdown; and 52-week-position context. These metrics are required
+before a candidate can receive a recommendation. Newer tickers/IPOs/ETFs may carry an explicit
+history-availability waiver rather than being silently excluded. Portfolio weight impact is owned by
+strategy because it joins market data to portfolio state.
+
+One-time-buy eligibility also needs compact valuation/fundamental context. V1 should treat this as a
+provider-backed screening pack, not a full model: revenue growth, margin/profitability, valuation,
+debt/cash, and earnings-date context for stocks; expense ratio, holdings/exposure, AUM/liquidity proxy,
+and benchmark tracking context for ETFs. CSV/manual fundamentals remain an override and bootstrap
+path. This pack is intentionally expected to broaden after the first working loop shows which evidence
+improves recommendations.
+
 ### 2.1 Derived metrics (L2) — computed our way, per instrument
 
 Recomputable from `fin_price_bars`, stored in `fin_metrics` **append-by-`as_of`** so the metrics form a
@@ -54,6 +70,10 @@ running"). All need **only prices** — no paid provider — and are exactly wha
 | **Trend / momentum** | momentum (12-1m, 3m), % off 52-week high/low, moving averages (20/50/200d) + crossovers | `adj_close` | |
 | **Relative** | return / momentum **vs a benchmark** (SPY/QQQ), beta, relative strength | `adj_close` + benchmark bars | needs a benchmark ticker in the universe |
 | **Risk-adjusted** | Sharpe-like (return/vol), Sortino | metrics above + risk-free rate | risk-free rate is a deferred input; note the assumption |
+
+For v1 deployment recommendations, default benchmark context uses `SPY` unless the caller provides
+another `benchmark_ticker`. V1 supports one benchmark per plan. Relative-return and benchmark-derived
+metrics must carry the benchmark ticker in returned evidence and rendered memos.
 
 ### 2.2 Aggregated metrics (L3) — rollups across instruments ("aggregated data")
 
@@ -74,9 +94,10 @@ Two flavors: **price-derived screens** (momentum rank, drawdown rank, vol rank, 
 theme median) and — the user's most-wanted artifact — a **fundamentals valuation table**: peers compared
 on P/S (TTM + forward), EV/EBITDA, gross margin, YoY revenue growth, plus a computed **Value/Growth
 score**. This is the L4 lens of the
-[instrument deep-dive dossier](../../../../notes/finance-corpus/00-inbox/ticker-deep-dive-target-experience.md)
+[instrument deep-dive dossier](../../../notes/finance-corpus/00-inbox/ticker-deep-dive-target-experience.md)
 (its DD-2/DD-3), and the "financial analysis of a theme's players" the research lens wants to **read**
-but never compute itself (research §8: cross-player screens are a fast-follow once metrics exist).
+but never compute itself. Research quantitative integration keeps cross-player screens outside the
+research layer.
 
 **The surface is one tool:** `finance.compare(tickers, metrics)` — hand it an explicit peer list and a
 metric set, get back a deterministic table. Peer selection is a *caller* input (theme co-members from
@@ -168,13 +189,14 @@ The analytics stack pulls in heavy scientific dependencies (`pandas`, `numpy`, l
 
 ## 5. Data model
 
-`fin_metrics` is **owned here** but **built when the metrics slice (L2) activates** — the same
-discipline research uses for `promote_to_strategy` (design the seam, defer the build). It reads
-`fin_price_bars` (owned by [acquisition](./acquisition.md)). Finance-owned migration table,
-FK/`CHECK`/indexes, `PRAGMA foreign_keys = ON` per connection — same conventions as acquisition.
+`fin_metrics` is **owned here**. The v1 deployment evidence subset is built now; broader metric
+families are added only when their slice activates. It reads `fin_price_bars` (owned by
+[acquisition](./acquisition.md)). Finance-owned migration table, FK/`CHECK`/indexes,
+`PRAGMA foreign_keys = ON` per connection — same conventions as acquisition.
 
 ```sql
--- L2 — designed now, built when the metrics slice activates. Append-by-as_of so metrics form a series.
+-- L2 — v1 evidence subset active; broader metric families activate later.
+-- Append-by-as_of so metrics form a series.
 CREATE TABLE fin_metrics (
   scope   TEXT NOT NULL,           -- 'ticker' | 'sleeve' | 'portfolio'
   key     TEXT NOT NULL,           -- ticker / sleeve name / 'TOTAL'
@@ -201,21 +223,24 @@ it (the promotion path, §3). This keeps the table from accreting every experime
 
 ## 6. Build gating & proposed slices
 
-This whole spec is the **Analyze gate** downstream of the acquisition build line
-([acquisition §5](./acquisition.md), drawn 2026-05-31): the first push stops at the snapshot loop (B),
-so **metrics are explicitly *not* in the initial slice** — they activate once a `fin_price_bars` series
-has depth. Note allocation drift (the headline "what shifted" aggregate) additionally needs
-holdings/strategy from later slices, so it lands in Slice B here, not Slice A.
+The 2026-05-31 acquisition build line still stops at the snapshot loop (B), but the 2026-06-21
+deployment recommendation contract pulls forward one narrow L2 evidence slice because candidate
+eligibility depends on it. That slice is not the full Analyze program: screens, event-response
+analytics, dashboards, simulations, and broad metric expansion remain gated. Allocation drift as a
+portfolio/sleeve aggregate still needs holdings/strategy and remains outside the initial metrics slice;
+the planner-owned portfolio weight impact is computed by strategy and persisted with the plan.
 
-The [instrument deep-dive dossier](../../../../notes/finance-corpus/00-inbox/ticker-deep-dive-target-experience.md)
-is the first named consumer pulling these forward: its price/momentum context wants Slice A (L2
-metrics), and its valuation-table lens wants the `finance.compare` table (Slice C, L4) on top of graded
-fundamentals from acquisition.
+Deployment recommendations are the first consumer pulling A0 forward. The
+[instrument deep-dive dossier](../../../notes/finance-corpus/00-inbox/ticker-deep-dive-target-experience.md)
+remains the first named consumer for broader research analytics: its price/momentum context wants Slice
+A (L2 metrics), and its valuation-table lens wants the `finance.compare` table (Slice C, L4) on top of
+graded fundamentals from acquisition.
 
 | Slice | Layer | Builds | Gate |
 |---|---|---|---|
-| **A** | L2 | `fin_metrics` compute step (returns/vol/drawdown/momentum from `adj_close`); fills research `metrics` slot | the Analyze gate fires — a `fin_price_bars` series has depth |
-| **B** | L3 | sleeve/portfolio aggregates (drift, concentration, contribution) | holdings + strategy slices are live |
+| **A0 (v1 evidence)** | L2 | `fin_metrics` compute step for candidate eligibility: 1m/3m/6m/1y returns, realized volatility, max drawdown, current drawdown, 52-week-position context, and benchmark context defaulting to `SPY`; uses `adj_close`, requires 1 year of daily bars when available, and records explicit history waivers for newer tickers/IPOs/ETFs | v1 deployment recommendations need the minimum evidence pack |
+| **A** | L2 | broader `fin_metrics` set (additional returns, momentum, moving averages, beta, risk-adjusted metrics once inputs exist); fills research `metrics` slot beyond planner evidence | after A0, when a named research/analytics workflow needs it |
+| **B** | L3 | sleeve/portfolio aggregates (drift, concentration, contribution) | holdings + strategy slices are live and aggregate metrics have a consumer |
 | **C** | L4 | cross-sectional theme screens/rankings | metrics exist and a theme comparison is wanted |
 | **D** | L5 / L6 | event-response analytics; simulation/backtest | `fin_events` active; deep history justified |
 
@@ -245,15 +270,15 @@ persist/return), mirroring the ingestion slice.
 
 ## 8. Sharpening agenda & decision ledger
 
-These open only once the Analyze gate fires and L2 is on the build path ([acquisition §5](./acquisition.md)).
-Recorded now so the design is ready.
+The v1 evidence questions are closed here. The remaining open items belong to broader Analyze work,
+not the first deployment-recommendation PRD.
 
 | # | Question | Lean | Status |
 |---|---|---|---|
-| **N1** | Exact metric set + window definitions for the first `fin_metrics` slice | return + vol + drawdown + momentum over 1w/1m/3m | open |
-| N2 | Benchmark ticker(s) for relative metrics, and how they enter the universe | SPY (+ QQQ for compute-heavy themes) | open |
+| **N1** | Exact metric set + window definitions for the first `fin_metrics` slice | v1 stores 1m/3m/6m/1y returns, realized volatility, max drawdown, current drawdown, and 52-week-position context over 1 year of daily bars when available; waive explicitly for newer tickers/IPOs/ETFs | **APPROVED** |
+| **N2** | Benchmark ticker(s) for relative metrics, and how they enter the universe | default to `SPY`; include the benchmark in the v1 evidence universe and every benchmark-derived evidence envelope; theme-specific benchmarks are deferred | **APPROVED** |
 | N3 | Risk-free rate source for risk-adjusted metrics | defer Sharpe/Sortino until a real need; note the assumption | open |
-| N4 | Which metrics are stored vs. computed-on-read | store the cheap point-in-time set; compute heavy/exploratory on the fly | leaning (§5) |
+| **N4** | Which metrics are stored vs. computed-on-read | store the cheap point-in-time v1 evidence set in `fin_metrics`; compute heavy/exploratory metrics on the fly until promoted | **APPROVED** |
 | N5 | Vault/repo location + structure for `scripts/finance/` and notebooks | settle alongside the first real script | open |
 
 ### Decision ledger
@@ -265,4 +290,5 @@ Recorded now so the design is ready.
 | 2026-05-31 | Dependency boundary | Analysis stack (`pandas`/`numpy`/`jupyter`/…) is an optional extra, not a core dep; scripts + notebooks share one `uv` venv; lazy import with a clear "install the extra" error. | Core hub + CLI + budget slice stay light and installable without the scientific stack. |
 | 2026-05-31 | Metric storage | Cheap point-in-time metrics → stored in `fin_metrics` (append-by-`as_of`); heavy/exploratory/one-off → computed on the fly until they earn persistence. | Metrics form their own analyzable series without persisting every experiment. |
 | 2026-05-31 | L4 / `finance.compare` | L4 includes a fundamentals **valuation table** via `finance.compare(tickers, metrics)`. Derived scores (e.g. Value/Growth) are deterministic tool computations over cited, graded inputs; tables are **multi-source per-cell** (the "pie") with composite grade = min(inputs); **compose, don't blend**; never a mixed-vendor series. Peer set is a caller input. | Absorbs the dossier's DD-2/DD-3 and DDQ-1/DDQ-4 (§2.3). |
-| 2026-05-31 | Graded-provenance envelope | Every quantitative value crossing a seam carries `{value, source, grade, as_of}`; `fin_metrics` gains `source`/`grade` columns; the deferred fundamentals cache carries them too. | Makes the north star structural and the multi-source pie safe. Canonical statement in [acquisition §2](./acquisition.md). |
+| 2026-05-31 | Graded-provenance envelope | Every quantitative value crossing a seam carries `{value, source, grade, as_of}`; `fin_metrics` gains `source`/`grade` columns; the compact fundamentals cache carries them too. | Makes the north star structural and the multi-source pie safe. Canonical statement in [acquisition §2](./acquisition.md). |
+| 2026-06-21 | V1 deployment metric pack | Pull forward only the planner-required L2 evidence pack into `fin_metrics`; broader Analyze work remains gated. Use `SPY` as the default benchmark and explicit waivers for insufficient history. | Removes the contradiction between "all metrics deferred" and the strategy candidate eligibility gate. |

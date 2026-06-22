@@ -212,8 +212,8 @@ uv run pytest
 
 ## Background References
 
-- [`requirements-dump.md`](../../../../notes/finance-corpus/00-inbox/requirements-dump.md)
-- [`data-pipeline-spec.md`](../../../../notes/finance-corpus/00-inbox/data-pipeline-spec.md)
-- [`data-pipeline-answers.md`](../../../../notes/finance-corpus/00-inbox/data-pipeline-answers.md)
+- [`requirements-dump.md`](../../../notes/finance-corpus/00-inbox/requirements-dump.md)
+- [`data-pipeline-spec.md`](../../../notes/finance-corpus/00-inbox/data-pipeline-spec.md)
+- [`data-pipeline-answers.md`](../../../notes/finance-corpus/00-inbox/data-pipeline-answers.md)
 - `../finance-hub/scripts/import_chase.py`
 - `../finance-hub/scripts/import_fidelity.py`
