@@ -31,3 +31,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-m 'not live'"
+markers = [
+    "live: hits a real network/provider; opt-in, excluded from the default suite (run with -m live)",
+]

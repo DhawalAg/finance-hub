@@ -127,6 +127,28 @@ MIGRATIONS: list[tuple[int, str]] = [
         );
         """,
     ),
+    (
+        3,
+        """
+        CREATE TABLE IF NOT EXISTS fin_price_bars (
+            ticker            TEXT NOT NULL,
+            session_date      TEXT NOT NULL,
+            open_micros       INTEGER,
+            high_micros       INTEGER,
+            low_micros        INTEGER,
+            close_micros      INTEGER NOT NULL,
+            adj_close_micros  INTEGER,
+            volume            INTEGER,
+            currency          TEXT NOT NULL DEFAULT 'USD' CHECK (currency = 'USD'),
+            source            TEXT NOT NULL,
+            first_fetched_at  TEXT NOT NULL,
+            last_refreshed_at TEXT NOT NULL,
+            PRIMARY KEY (ticker, session_date, source)
+        );
+        CREATE INDEX IF NOT EXISTS ix_fin_price_bars_ticker_session
+            ON fin_price_bars (ticker, session_date DESC);
+        """,
+    ),
 ]
 
 
