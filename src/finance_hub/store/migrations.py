@@ -201,6 +201,32 @@ MIGRATIONS: list[tuple[int, str]] = [
             ON fin_portfolio_positions(snapshot_id);
         """,
     ),
+    (
+        6,
+        """
+        -- L2 v1 evidence metrics pack, computed our way from fin_price_bars
+        -- (adj_close). Append-by-`as_of` so a metric forms its own analyzable
+        -- series: the PK includes `as_of`, so recomputing a later trading day
+        -- adds rows rather than overwriting history. `benchmark_ticker` is
+        -- carried on every benchmark-derived value (NULL otherwise).
+        CREATE TABLE IF NOT EXISTS fin_metrics (
+            scope            TEXT NOT NULL,
+            key              TEXT NOT NULL,
+            metric           TEXT NOT NULL,
+            window           TEXT NOT NULL,
+            as_of            TEXT NOT NULL,
+            value            REAL,
+            source           TEXT,
+            grade            TEXT,
+            benchmark_ticker TEXT,
+            PRIMARY KEY (scope, key, metric, window, as_of),
+            CHECK (scope IN ('ticker', 'sleeve', 'portfolio')),
+            CHECK (grade IS NULL OR grade IN ('decision', 'screening'))
+        );
+        CREATE INDEX IF NOT EXISTS ix_fin_metrics_scope_key
+            ON fin_metrics (scope, key);
+        """,
+    ),
 ]
 
 
