@@ -1,0 +1,25 @@
+{
+  "General": {
+    "Code": "SPY",
+    "Type": "ETF",
+    "Name": "SPDR S&P 500 ETF Trust",
+    "UpdatedAt": "2026-05-30"
+  },
+  "ETF_Data": {
+    "NetExpenseRatio": "0.0009",
+    "TotalAssets": "612000000000",
+    "Performance": {
+      "Returns_1Y": "0.146"
+    },
+    "Top_10_Holdings": {
+      "NVDA.US": {"Name": "NVIDIA Corp", "Assets_%": "7.1"},
+      "AAPL.US": {"Name": "Apple Inc", "Assets_%": "6.4"},
+      "MSFT.US": {"Name": "Microsoft Corp", "Assets_%": "6.0"}
+    },
+    "Sector_Weights": {
+      "Technology": {"Equity_%": "31.2"},
+      "Financials": {"Equity_%": "13.0"},
+      "Health Care": {"Equity_%": "11.4"}
+    }
+  }
+}

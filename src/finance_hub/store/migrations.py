@@ -149,6 +149,25 @@ MIGRATIONS: list[tuple[int, str]] = [
             ON fin_price_bars (ticker, session_date DESC);
         """,
     ),
+    (
+        4,
+        """
+        CREATE TABLE IF NOT EXISTS fin_fundamentals (
+            ticker      TEXT NOT NULL,
+            field       TEXT NOT NULL,
+            as_of       TEXT NOT NULL,
+            value       TEXT,
+            unit        TEXT,
+            source      TEXT NOT NULL,
+            grade       TEXT NOT NULL CHECK (grade IN ('decision', 'screening')),
+            fetched_at  TEXT NOT NULL,
+            source_ref  TEXT,
+            PRIMARY KEY (ticker, field, as_of, source)
+        );
+        CREATE INDEX IF NOT EXISTS ix_fin_fundamentals_ticker_field
+            ON fin_fundamentals (ticker, field);
+        """,
+    ),
 ]
 
 
