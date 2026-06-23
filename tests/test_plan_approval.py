@@ -6,8 +6,6 @@ All clock calls use FixedClock(2026-06-23T12:00).
 """
 from __future__ import annotations
 
-import json
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -532,8 +530,6 @@ class TestDraftMemoArtifacts:
 
 class TestCheckPlanReadinessPure:
     """Pure function tests — no DB required."""
-
-    from finance_hub.strategy import deployment as _dep
 
     def _make_price_check(self, ticker, bucket, draft, current):
         from decimal import Decimal

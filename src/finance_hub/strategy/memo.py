@@ -36,12 +36,6 @@ def _dollars(micros: int) -> str:
     return f"${Decimal(micros) / 1_000_000:,.2f}"
 
 
-def _pct(bps: Optional[int]) -> str:
-    if bps is None:
-        return "n/a"
-    return f"{Decimal(bps) / 100:.2f}%"
-
-
 def _draft_memo_dir() -> Path:
     return WORKSPACE_ROOT / "drafts"
 
@@ -68,6 +62,33 @@ def draft_memo_path(plan_id: str, output_mode: str = "deployment_draft") -> Path
 
 def approved_memo_path(plan_id: str) -> Path:
     return _approved_memo_dir() / f"{plan_id}_approved.md"
+
+
+def _render_line_section(
+    sections: list[str],
+    *,
+    title: str,
+    lines: list[dict],
+    empty_message: str,
+    unallocated_micros: int,
+    unallocated_label: str,
+) -> None:
+    """Append a bucket section (DCA or one-time) of plan lines to ``sections``."""
+    sections.append(f"## {title}")
+    sections.append("")
+    if lines:
+        for line in lines:
+            sections.append(
+                f"- **{line['ticker']}** ({line['sleeve_key']}) — "
+                f"{_dollars(line['amount_micros'])} [rank #{line['rank']}]"
+            )
+            if line.get("rationale"):
+                sections.append(f"  *{line['rationale']}*")
+    else:
+        sections.append(empty_message)
+    if unallocated_micros > 0:
+        sections.append(f"- *{unallocated_label}: {_dollars(unallocated_micros)}*")
+    sections.append("")
 
 
 def render_draft_memo(plan: dict, generated_at: str) -> str:
@@ -133,41 +154,22 @@ def render_draft_memo(plan: dict, generated_at: str) -> str:
     dca_lines = [l for l in lines if l["bucket"] == "dca"]
     one_time_lines = [l for l in lines if l["bucket"] == "one_time"]
 
-    # DCA lines
-    sections.append("## DCA Lines")
-    sections.append("")
-    if dca_lines:
-        for line in dca_lines:
-            sections.append(
-                f"- **{line['ticker']}** ({line['sleeve_key']}) — "
-                f"{_dollars(line['amount_micros'])} [rank #{line['rank']}]"
-            )
-            if line.get("rationale"):
-                sections.append(f"  *{line['rationale']}*")
-    else:
-        sections.append("*No DCA lines.*")
-    dca_unalloc = plan.get("dca_unallocated_micros", 0)
-    if dca_unalloc > 0:
-        sections.append(f"- *Unallocated DCA cash: {_dollars(dca_unalloc)}*")
-    sections.append("")
-
-    # One-time lines
-    sections.append("## One-Time Lines")
-    sections.append("")
-    if one_time_lines:
-        for line in one_time_lines:
-            sections.append(
-                f"- **{line['ticker']}** ({line['sleeve_key']}) — "
-                f"{_dollars(line['amount_micros'])} [rank #{line['rank']}]"
-            )
-            if line.get("rationale"):
-                sections.append(f"  *{line['rationale']}*")
-    else:
-        sections.append("*No one-time buy lines.*")
-    ot_unalloc = plan.get("one_time_unallocated_micros", 0)
-    if ot_unalloc > 0:
-        sections.append(f"- *Unallocated one-time cash: {_dollars(ot_unalloc)}*")
-    sections.append("")
+    _render_line_section(
+        sections,
+        title="DCA Lines",
+        lines=dca_lines,
+        empty_message="*No DCA lines.*",
+        unallocated_micros=plan.get("dca_unallocated_micros", 0),
+        unallocated_label="Unallocated DCA cash",
+    )
+    _render_line_section(
+        sections,
+        title="One-Time Lines",
+        lines=one_time_lines,
+        empty_message="*No one-time buy lines.*",
+        unallocated_micros=plan.get("one_time_unallocated_micros", 0),
+        unallocated_label="Unallocated one-time cash",
+    )
 
     # Warnings / blocks
     if warnings:

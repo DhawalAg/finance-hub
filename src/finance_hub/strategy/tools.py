@@ -801,9 +801,7 @@ def generate_deployment_plan(
 
     # Mark the superseded plan after persisting the new one.
     if supersedes_plan_id is not None:
-        _plan_store.update_plan_status(
-            supersedes_plan_id, status="superseded", now=now_ts
-        )
+        _plan_store.update_plan_status(supersedes_plan_id, status="superseded")
 
     # Write draft memo artifact (workspace/drafts/ or workspace/allocation-reviews/).
     plan_for_memo = {
@@ -1146,7 +1144,7 @@ def approve_deployment_plan(*, plan_id: str, confirm: bool = False) -> dict:
 
     now_ts = _now()
     _plan_store.update_plan_status(
-        plan_id, status="approved", now=now_ts, approved_at=now_ts
+        plan_id, status="approved", approved_at=now_ts
     )
 
     updated_plan = _plan_store.get_plan(plan_id)
@@ -1191,7 +1189,6 @@ def reject_deployment_plan(
     _plan_store.update_plan_status(
         plan_id,
         status="rejected",
-        now=now_ts,
         rejected_at=now_ts,
         rejection_reason=reason.strip(),
     )

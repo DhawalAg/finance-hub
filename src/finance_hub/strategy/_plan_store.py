@@ -204,7 +204,6 @@ def update_plan_status(
     plan_id: str,
     *,
     status: str,
-    now: str,
     rejection_reason: Optional[str] = None,
     approved_at: Optional[str] = None,
     rejected_at: Optional[str] = None,
