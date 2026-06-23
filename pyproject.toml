@@ -4,7 +4,6 @@ version = "0.1.0"
 description = "Finance-focused agent tools exposed through CLI and MCP."
 requires-python = ">=3.10"
 dependencies = [
-    "anthropic>=0.40",
     "typer>=0.12",
     "mcp>=1.2",
 ]
