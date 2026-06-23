@@ -16,40 +16,67 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from finance_hub.money import to_micro_dollars
 from finance_hub.store import connection
 
 SOURCE_ADAPTER = "fidelity_csv"
 
-# Fidelity "Type" column → canonical asset_type. Anything outside this map
-# is preserved verbatim (lowercased) and treated as unsupported.
 _SUPPORTED_ASSET_TYPES = {"stock", "etf"}
-_FIDELITY_TYPE_MAP = {
-    "etf": "etf",
-    "stock": "stock",
-    "stk": "stock",
-    "common stock": "stock",
-    "preferred stock": "preferred_stock",
-    "mutual fund": "mutual_fund",
-    "bond": "bond",
-    "fixed income": "bond",
-    "option": "option",
-    "cash": "cash",
-    "crypto": "crypto",
-    "cryptocurrency": "crypto",
+
+# Month abbreviations used in Fidelity's "Date downloaded" line.
+_MONTH_ABBR: dict[str, int] = {
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4,
+    "may": 5, "jun": 6, "jul": 7, "aug": 8,
+    "sep": 9, "oct": 10, "nov": 11, "dec": 12,
 }
+
+_DATE_DOWNLOADED_RE = re.compile(
+    r'Date downloaded\s+([A-Za-z]+)-(\d{1,2})-(\d{4})'
+    r'\s+(\d{1,2}):(\d{2})\s+(a\.m\.|p\.m\.)\s+ET'
+)
+
+
+def parse_date_downloaded(line: str) -> datetime:
+    """Parse a Fidelity 'Date downloaded' line into a timezone-aware datetime.
+
+    Accepts the bare or quoted form:
+        Date downloaded Jun-22-2026 10:30 a.m. ET
+        "Date downloaded Jun-22-2026 10:30 a.m. ET"
+
+    The timezone is America/New_York (Fidelity always writes literal 'ET').
+    """
+    line = line.strip().strip('"')
+    m = _DATE_DOWNLOADED_RE.search(line)
+    if not m:
+        raise ValueError(f"Cannot parse Date downloaded line: {line!r}")
+    month_abbr, day, year, hour, minute, ampm = m.groups()
+    month = _MONTH_ABBR.get(month_abbr.lower())
+    if not month:
+        raise ValueError(f"Unknown month abbreviation: {month_abbr!r}")
+    h = int(hour)
+    if ampm == "p.m." and h != 12:
+        h += 12
+    elif ampm == "a.m." and h == 12:
+        h = 0
+    return datetime(
+        int(year), month, int(day), h, int(minute),
+        tzinfo=ZoneInfo("America/New_York"),
+    )
 
 
 @dataclass(frozen=True)
 class _ParsedPosition:
     account_name: str
     account_type: str
+    account_registration: Optional[str]
     ticker: Optional[str]
     name: Optional[str]
     asset_type: str
@@ -63,12 +90,7 @@ class _ParsedPosition:
 
 
 def _normalize_account_type(account_name: str) -> str:
-    """Map a Fidelity account display name to a canonical account_type.
-
-    Recommendations stay allocation-level (the planner never says which
-    account receives a buy), but the spec still wants Roth/IRA/brokerage
-    distinctions stored.
-    """
+    """Map a Fidelity account display name to a canonical account_type."""
     n = account_name.lower()
     if "roth" in n:
         return "roth_ira"
@@ -83,9 +105,33 @@ def _normalize_account_type(account_name: str) -> str:
     return "brokerage"
 
 
-def _normalize_asset_type(raw: str) -> str:
-    raw = (raw or "").strip().lower()
-    return _FIDELITY_TYPE_MAP.get(raw, raw or "unknown")
+def _infer_asset_type(ticker: str, description: str) -> tuple[str, bool]:
+    """Return (asset_type, skip) inferred from ticker and description.
+
+    skip=True means the row should not be persisted (e.g. Pending activity).
+    Classification rules (applied in order):
+      1. "pending" in description → skip
+      2. Ticker starts with FCASH or "fcash" in description → cash
+      3. "etf" in description → etf
+      4. Non-empty ticker → stock
+      5. Fallback → unknown
+    """
+    desc_lower = (description or "").lower().strip()
+    ticker_upper = (ticker or "").upper()
+
+    if "pending" in desc_lower:
+        return "cash", True
+
+    if ticker_upper.startswith("FCASH") or "fcash" in desc_lower:
+        return "cash", False
+
+    if "etf" in desc_lower:
+        return "etf", False
+
+    if ticker:
+        return "stock", False
+
+    return "unknown", False
 
 
 def _clean_money(raw: Optional[str]) -> Optional[str]:
@@ -106,12 +152,6 @@ def _money_to_micros(raw: Optional[str]) -> Optional[int]:
 
 
 def _row_hash(account_name: str, ticker: str, quantity: str, market_value: str, cost_basis: str) -> str:
-    """Stable hash of the row fields that identify a position within an import.
-
-    We hash account+ticker+quantity+market_value+cost_basis so two truly
-    identical lines collapse, but the same ticker held in two accounts
-    (or at two different cost bases after a reinvestment) does not.
-    """
     payload = "|".join((account_name, ticker, quantity, market_value, cost_basis))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -120,15 +160,23 @@ def _parse_row(row: dict[str, str]) -> Optional[_ParsedPosition]:
     """Translate one Fidelity CSV row into a canonical position.
 
     Returns ``None`` for rows that don't represent a position (blank
-    separator lines, footer totals).
+    separator lines, footer totals, disclaimer text, Pending activity).
     """
     account_name = (row.get("Account Name") or "").strip()
     ticker_raw = (row.get("Symbol") or "").strip()
     if not account_name and not ticker_raw:
-        return None  # blank separator / footer line
+        return None  # blank / disclaimer / date-downloaded rows
 
-    name = (row.get("Description") or "").strip() or None
-    asset_type = _normalize_asset_type(row.get("Type") or "")
+    description = (row.get("Description") or "").strip()
+    asset_type, skip = _infer_asset_type(ticker_raw, description)
+    if skip:
+        return None
+
+    # The Fidelity "Type" column carries account registration (Cash/Margin),
+    # not security type. Store it verbatim (lowercased) for audit purposes.
+    account_registration_raw = (row.get("Type") or "").strip()
+    account_registration = account_registration_raw.lower() or None
+
     quantity_raw = (row.get("Quantity") or "").strip()
     quantity = quantity_raw or None
     current_value_raw = row.get("Current Value")
@@ -158,8 +206,9 @@ def _parse_row(row: dict[str, str]) -> Optional[_ParsedPosition]:
     return _ParsedPosition(
         account_name=account_name,
         account_type=_normalize_account_type(account_name),
+        account_registration=account_registration,
         ticker=ticker,
-        name=name,
+        name=description or None,
         asset_type=asset_type,
         quantity=quantity,
         market_value_micros=market_value_micros,
@@ -182,6 +231,10 @@ class FidelityPortfolioCsvAdapter:
         ``as_of`` is the user-supplied portfolio time the planner uses
         for freshness checks. The file path is recorded verbatim so the
         snapshot can be re-explained later.
+
+        Trailing disclaimer paragraphs and the 'Date downloaded' line
+        present in real Fidelity exports are silently skipped — they have
+        no Account Name or Symbol and fall through the blank-row filter.
         """
         path = Path(csv_path)
         with path.open(newline="") as f:
@@ -207,16 +260,17 @@ class FidelityPortfolioCsvAdapter:
                 conn.execute(
                     """
                     INSERT INTO fin_portfolio_positions (
-                        snapshot_id, account_name, account_type, ticker, name,
-                        asset_type, quantity, market_value_micros,
+                        snapshot_id, account_name, account_type, account_registration,
+                        ticker, name, asset_type, quantity, market_value_micros,
                         cost_basis_micros, cash_value_micros, currency,
                         is_supported, source_row_hash
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         snapshot_id,
                         p.account_name,
                         p.account_type,
+                        p.account_registration,
                         p.ticker,
                         p.name,
                         p.asset_type,

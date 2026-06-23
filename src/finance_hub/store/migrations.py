@@ -462,6 +462,12 @@ MIGRATIONS: list[tuple[int, str]] = [
         ALTER TABLE fin_deployment_plan_evidence ADD COLUMN draft_close_micros INTEGER;
         """,
     ),
+    (
+        12,
+        """
+        ALTER TABLE fin_portfolio_positions ADD COLUMN account_registration TEXT;
+        """,
+    ),
 ]
 
 
