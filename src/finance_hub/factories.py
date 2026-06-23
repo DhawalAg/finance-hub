@@ -69,7 +69,7 @@ def set_clock(clock: Clock) -> None:
 
 
 def get_price_provider() -> Any:
-    global _price_provider, _price_provider_factory
+    global _price_provider
     if _price_provider is None:
         if _price_provider_factory is not None:
             _price_provider = _price_provider_factory()
