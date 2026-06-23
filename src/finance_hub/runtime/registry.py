@@ -15,7 +15,6 @@ _REGISTRY: dict[str, "Tool"] = {}
 # Tool modules whose import side-effects register finance capabilities.
 _TOOL_MODULES = [
     "finance_hub.runtime.tools",
-    # parked: ingestion is out of v1 scope (PRD); stub registers no tools yet.
     "finance_hub.ingestion.tools",
     "finance_hub.market_data.tools",
     "finance_hub.research.tools",
