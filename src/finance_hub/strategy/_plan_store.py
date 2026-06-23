@@ -33,7 +33,9 @@ def persist_plan(
     All in one transaction so a half-written plan never lands. ``header``
     carries ``effective_policy`` as a dict; it is serialized to JSON here.
     ``lines`` carry ``ranked_factors`` as a list; same treatment.
+    ``header`` may include Slice-10 freshness and mode fields.
     """
+    blocked = header.get("blocked_output_modes")
     with connection.connect() as conn:
         conn.execute(
             "INSERT INTO fin_deployment_plans ("
@@ -42,14 +44,16 @@ def persist_plan(
             " deployable_cash_micros, dca_budget_micros, one_time_buy_budget_micros,"
             " dca_unallocated_micros, one_time_unallocated_micros,"
             " total_unallocated_micros, effective_policy, supersedes_plan_id,"
-            " created_at"
-            ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " created_at,"
+            " snapshot_freshness_band, snapshot_days_old,"
+            " portfolio_changed_after_snapshot, blocked_output_modes"
+            ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 header["plan_id"],
                 header["output_mode"],
                 header["status"],
-                header["portfolio_snapshot_id"],
-                header["strategy_version_id"],
+                header.get("portfolio_snapshot_id"),
+                header.get("strategy_version_id"),
                 header["benchmark_ticker"],
                 header["risk_mode"],
                 header.get("dca_cadence"),
@@ -62,6 +66,10 @@ def persist_plan(
                 json.dumps(header["effective_policy"]),
                 header.get("supersedes_plan_id"),
                 now,
+                header.get("snapshot_freshness_band"),
+                header.get("snapshot_days_old"),
+                1 if header.get("portfolio_changed_after_snapshot") else 0,
+                json.dumps(blocked) if blocked is not None else None,
             ),
         )
         for line in lines:
@@ -148,6 +156,16 @@ def get_plan(plan_id: str) -> Optional[dict]:
             )
         ]
     return plan
+
+
+def load_snapshot_header(snapshot_id: str) -> Optional[dict]:
+    """Return the header row for a snapshot (snapshot_id, as_of, ...), or None."""
+    with connection.connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM fin_portfolio_snapshots WHERE snapshot_id = ?",
+            (snapshot_id,),
+        ).fetchone()
+        return _row_to_dict(row) if row is not None else None
 
 
 def load_snapshot_positions(snapshot_id: str) -> Optional[list[dict]]:

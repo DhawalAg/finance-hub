@@ -19,6 +19,7 @@ allocation math or gates (PRD story 51).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date
 from decimal import Decimal
 from typing import Optional
 
@@ -27,6 +28,20 @@ MARKET_DATA_MISSING = "MARKET_DATA_MISSING"
 UNKNOWN_SLEEVE_EXPOSURE = "UNKNOWN_SLEEVE_EXPOSURE"
 SINGLE_TICKER_CONCENTRATION = "SINGLE_TICKER_CONCENTRATION"
 SLEEVE_OVER_TARGET = "SLEEVE_OVER_TARGET"
+PORTFOLIO_SNAPSHOT_STALE = "PORTFOLIO_SNAPSHOT_STALE"
+PORTFOLIO_SNAPSHOT_TOO_OLD_FOR_ONE_TIME = "PORTFOLIO_SNAPSHOT_TOO_OLD_FOR_ONE_TIME"
+PORTFOLIO_CHANGED_AFTER_SNAPSHOT = "PORTFOLIO_CHANGED_AFTER_SNAPSHOT"
+
+# Output modes ordered from weakest (research only) to strongest (dollars committed).
+_OUTPUT_MODES = (
+    "research_priorities",
+    "candidate_review",
+    "watchlist_review",
+    "allocation_review",
+    "deployment_draft",
+    "plan_readiness_check",
+)
+_OUTPUT_MODE_RANK: dict[str, int] = {m: i for i, m in enumerate(_OUTPUT_MODES)}
 
 _FULL_ALLOCATION_BPS = 10_000
 _BUCKETS = ("dca", "one_time")
@@ -74,6 +89,146 @@ class PlanPolicy:
             "unknown_sleeve_warning_pct": str(self.unknown_sleeve_warning_pct),
             "unknown_sleeve_block_pct": str(self.unknown_sleeve_block_pct),
         }
+
+
+@dataclass(frozen=True)
+class FreshnessResult:
+    """Deterministic snapshot freshness assessment against an injected clock."""
+
+    days_old: int
+    band: str  # fresh | mildly_stale | stale | too_stale_for_one_time
+    one_time_blocked: bool
+    one_time_requires_confirm: bool  # True only for stale (15-30); not for >30
+    warnings: tuple["Warning", ...]
+
+
+def validate_snapshot_freshness(
+    *,
+    snapshot_as_of: str,
+    as_of: str,
+    portfolio_changed: bool = False,
+) -> FreshnessResult:
+    """Compute freshness band and warnings for a portfolio snapshot.
+
+    Days are computed from ISO date strings so clock injection is exact (no
+    sub-day rounding). ``portfolio_changed=True`` treats the snapshot as at
+    least ``stale`` regardless of actual age — per PRD story 78.
+
+    Bands (days_old, inclusive):
+      0-7   fresh              — no warnings
+      8-14  mildly_stale       — PORTFOLIO_SNAPSHOT_STALE warning
+      15-30 stale              — PORTFOLIO_SNAPSHOT_STALE warning; one_time_blocked=True
+      >30   too_stale_for_one_time — PORTFOLIO_SNAPSHOT_TOO_OLD_FOR_ONE_TIME block
+    """
+    snap_date = date.fromisoformat(snapshot_as_of)
+    ref_date = date.fromisoformat(as_of)
+    days_old = max(0, (ref_date - snap_date).days)
+
+    effective_days = max(days_old, 15) if portfolio_changed else days_old
+
+    warnings: list[Warning] = []
+    if portfolio_changed:
+        warnings.append(
+            Warning(
+                code=PORTFOLIO_CHANGED_AFTER_SNAPSHOT,
+                severity="warning",
+                ticker=None,
+                message=(
+                    f"portfolio snapshot is {days_old} day(s) old; "
+                    "known changes after snapshot — treating plan as advisory only"
+                ),
+            )
+        )
+
+    if effective_days <= 7:
+        band = "fresh"
+        one_time_blocked = False
+        one_time_requires_confirm = False
+    elif effective_days <= 14:
+        band = "mildly_stale"
+        one_time_blocked = False
+        one_time_requires_confirm = False
+        warnings.append(
+            Warning(
+                code=PORTFOLIO_SNAPSHOT_STALE,
+                severity="warning",
+                ticker=None,
+                message=(
+                    f"portfolio snapshot is {effective_days} day(s) old "
+                    "(mildly stale; 8-14 day range)"
+                ),
+            )
+        )
+    elif effective_days <= 30:
+        band = "stale"
+        one_time_blocked = True
+        one_time_requires_confirm = True
+        warnings.append(
+            Warning(
+                code=PORTFOLIO_SNAPSHOT_STALE,
+                severity="warning",
+                ticker=None,
+                message=(
+                    f"portfolio snapshot is {effective_days} day(s) old "
+                    "(stale; 15-30 day range); one-time buys require "
+                    "confirm_stale_one_time=True"
+                ),
+            )
+        )
+    else:
+        band = "too_stale_for_one_time"
+        one_time_blocked = True
+        one_time_requires_confirm = False
+        warnings.append(
+            Warning(
+                code=PORTFOLIO_SNAPSHOT_TOO_OLD_FOR_ONE_TIME,
+                severity="block",
+                ticker=None,
+                message=(
+                    f"portfolio snapshot is {effective_days} day(s) old "
+                    "(>30 days); one-time buys are blocked regardless of "
+                    "confirmation"
+                ),
+            )
+        )
+
+    return FreshnessResult(
+        days_old=days_old,
+        band=band,
+        one_time_blocked=one_time_blocked,
+        one_time_requires_confirm=one_time_requires_confirm,
+        warnings=tuple(warnings),
+    )
+
+
+def determine_output_mode(
+    *,
+    requested: str,
+    max_achievable: str,
+) -> tuple[str, list[str]]:
+    """Downgrade the requested output mode to max_achievable if needed.
+
+    Returns (actual_mode, blocked_outputs) where blocked_outputs lists every
+    mode stronger than actual that was inside the requested range.
+    """
+    if requested not in _OUTPUT_MODE_RANK:
+        raise ValueError(
+            f"requested_output_mode must be one of {_OUTPUT_MODES}, got {requested!r}"
+        )
+    if max_achievable not in _OUTPUT_MODE_RANK:
+        raise ValueError(
+            f"max_achievable must be one of {_OUTPUT_MODES}, got {max_achievable!r}"
+        )
+    req_rank = _OUTPUT_MODE_RANK[requested]
+    max_rank = _OUTPUT_MODE_RANK[max_achievable]
+    actual_rank = min(req_rank, max_rank)
+    actual = _OUTPUT_MODES[actual_rank]
+    blocked = [
+        m
+        for m in _OUTPUT_MODES
+        if actual_rank < _OUTPUT_MODE_RANK[m] <= req_rank
+    ]
+    return actual, blocked
 
 
 @dataclass
