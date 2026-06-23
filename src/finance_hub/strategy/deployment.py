@@ -683,3 +683,116 @@ def _concentration_warnings(
 
 def _fmt_pct(fraction: Decimal) -> str:
     return str((fraction * 100).quantize(Decimal("0.01")))
+
+
+# ---------------------------------------------------------------------------
+# plan_readiness_check pure types and logic (Slice 11)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PriceCheck:
+    """Drift between the price used at draft time and the current price."""
+
+    ticker: str
+    bucket: str  # dca | one_time
+    draft_close_micros: int
+    current_close_micros: int
+    drift_pct: Decimal  # positive = current > draft
+
+
+@dataclass(frozen=True)
+class ReadinessResult:
+    """Pure output of the pre-approval readiness gate."""
+
+    status: str  # still_approvable | approval_warning | approval_blocked
+    price_checks: list[PriceCheck]
+    blocking_reasons: list[str]
+    warning_reasons: list[str]
+
+
+_APPROVABLE_STATUSES = frozenset({"proposed", "proposed_with_warnings"})
+
+# Drift thresholds per PRD story 84.
+_DRIFT_WARN_PCT = Decimal("3") / 100   # >3% → warn any line
+_DRIFT_BLOCK_PCT = Decimal("7") / 100  # >7% on one_time → block
+
+
+def check_plan_readiness(
+    *,
+    plan_status: str,
+    has_block_warnings: bool,
+    strategy_active: bool,
+    price_checks: list[PriceCheck],
+    policy: PlanPolicy,
+) -> ReadinessResult:
+    """Determine whether a saved draft can be approved.
+
+    Pure: no DB/clock access. The wrapper loads prices and strategy state,
+    then delegates here so the decision matrix is testable without a DB.
+
+    Returns one of:
+      ``still_approvable``  — no issues found
+      ``approval_warning``  — >3% price drift on any line; can still approve
+      ``approval_blocked``  — plan has block warnings, wrong status, strategy
+                              no longer active, or >7% drift on a one_time line
+    """
+    blocking: list[str] = []
+    warnings: list[str] = []
+
+    # Only proposed/proposed_with_warnings plans are candidates for approval.
+    if plan_status not in _APPROVABLE_STATUSES:
+        blocking.append(
+            f"plan status is {plan_status!r}; only 'proposed' or "
+            "'proposed_with_warnings' plans can be approved"
+        )
+
+    # Existing block-severity warnings make the plan un-approvable.
+    if has_block_warnings:
+        blocking.append(
+            "plan has one or more blocking warnings; resolve them and "
+            "generate a new draft"
+        )
+
+    # Strategy must still be active.
+    if not strategy_active:
+        blocking.append(
+            "the strategy used for this draft is no longer active; "
+            "generate a new draft"
+        )
+
+    # Price drift checks.
+    for pc in price_checks:
+        abs_drift = abs(pc.drift_pct)
+        if abs_drift >= _DRIFT_BLOCK_PCT and pc.bucket == "one_time":
+            pct_str = (abs_drift * 100).quantize(Decimal("0.01"))
+            blocking.append(
+                f"{pc.ticker} one-time line: price has drifted {pct_str}% from "
+                "draft price (>7% block threshold); generate a new draft"
+            )
+        elif abs_drift >= _DRIFT_WARN_PCT:
+            pct_str = (abs_drift * 100).quantize(Decimal("0.01"))
+            warnings.append(
+                f"{pc.ticker}: price has drifted {pct_str}% from draft price"
+            )
+
+    if blocking:
+        return ReadinessResult(
+            status="approval_blocked",
+            price_checks=price_checks,
+            blocking_reasons=blocking,
+            warning_reasons=warnings,
+        )
+    if warnings:
+        return ReadinessResult(
+            status="approval_warning",
+            price_checks=price_checks,
+            blocking_reasons=[],
+            warning_reasons=warnings,
+        )
+    return ReadinessResult(
+        status="still_approvable",
+        price_checks=price_checks,
+        blocking_reasons=[],
+        warning_reasons=[],
+    )

@@ -453,6 +453,15 @@ MIGRATIONS: list[tuple[int, str]] = [
             ON fin_deployment_plan_evidence(plan_id);
         """,
     ),
+    (
+        11,
+        """
+        ALTER TABLE fin_deployment_plans ADD COLUMN approved_at TEXT;
+        ALTER TABLE fin_deployment_plans ADD COLUMN rejected_at TEXT;
+        ALTER TABLE fin_deployment_plans ADD COLUMN rejection_reason TEXT;
+        ALTER TABLE fin_deployment_plan_evidence ADD COLUMN draft_close_micros INTEGER;
+        """,
+    ),
 ]
 
 

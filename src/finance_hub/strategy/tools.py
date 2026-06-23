@@ -22,7 +22,7 @@ from finance_hub.money import to_micro_dollars
 from finance_hub.research import _store as research_store
 from finance_hub.research import tools as research_tools
 from finance_hub.runtime.registry import tool
-from finance_hub.strategy import _plan_store, _store, deployment
+from finance_hub.strategy import _plan_store, _store, deployment, memo
 
 _STRATEGY_STATUSES = ("draft", "active", "archived")
 _FULL_ALLOCATION_BPS = 10_000  # 100%
@@ -359,6 +359,8 @@ def _line_evidence(line, ev: dict) -> list[dict]:
                 "ref_key": line.ticker,
                 "summary": f"close {_micros_to_str(price['close_micros'])} "
                 f"on {price['session_date']}",
+                # Stored for plan_readiness_check price-drift comparison.
+                "draft_close_micros": price["close_micros"],
             }
         )
     if _plan_store.has_metrics(line.ticker):
@@ -483,6 +485,8 @@ def generate_deployment_plan(
     requested_output_mode: str = "deployment_draft",
     portfolio_changed_after_snapshot: bool = False,
     confirm_stale_one_time: bool = False,
+    # Slice 11: explicit supersession
+    supersedes_plan_id: Optional[str] = None,
 ) -> dict:
     if risk_mode not in _RISK_MODES:
         raise ValueError(f"risk_mode must be one of {_RISK_MODES}, got {risk_mode!r}")
@@ -746,6 +750,23 @@ def generate_deployment_plan(
         else computation.buckets["one_time"].unallocated_micros
     )
 
+    # -----------------------------------------------------------------------
+    # Step 11: validate supersession (Slice 11).
+    # -----------------------------------------------------------------------
+    if supersedes_plan_id is not None:
+        old_plan = _plan_store.get_plan(supersedes_plan_id)
+        if old_plan is None:
+            raise LookupError(
+                f"supersedes_plan_id {supersedes_plan_id!r} does not exist"
+            )
+        if old_plan["status"] in ("superseded", "approved", "rejected"):
+            raise ValueError(
+                f"plan {supersedes_plan_id!r} is already {old_plan['status']!r} "
+                "and cannot be superseded again"
+            )
+
+    now_ts = _now()
+
     header = {
         "plan_id": plan_id,
         "output_mode": actual_mode,
@@ -762,7 +783,7 @@ def generate_deployment_plan(
         "one_time_unallocated_micros": one_time_unalloc,
         "total_unallocated_micros": dca_unalloc + one_time_unalloc,
         "effective_policy": policy.as_dict(),
-        "supersedes_plan_id": None,
+        "supersedes_plan_id": supersedes_plan_id,
         # Slice 10 freshness fields.
         "snapshot_freshness_band": freshness.band if freshness else None,
         "snapshot_days_old": freshness.days_old if freshness else None,
@@ -775,15 +796,37 @@ def generate_deployment_plan(
         lines=line_dicts,
         warnings=all_warnings,
         evidence=evidence_refs,
-        now=_now(),
+        now=now_ts,
     )
 
-    return {
+    # Mark the superseded plan after persisting the new one.
+    if supersedes_plan_id is not None:
+        _plan_store.update_plan_status(
+            supersedes_plan_id, status="superseded", now=now_ts
+        )
+
+    # Write draft memo artifact (workspace/drafts/ or workspace/allocation-reviews/).
+    plan_for_memo = {
+        **header,
+        "lines": [
+            {**ld, "amount": _micros_to_str(ld["amount_micros"])} for ld in line_dicts
+        ],
+        "warnings": all_warnings,
+        "watchlist": [
+            {"ticker": w.ticker, "reason": w.reason, "detail": w.detail}
+            for w in computation.watchlist
+        ],
+        "evidence": evidence_refs,
+    }
+    memo.write_draft_memo(plan_for_memo, generated_at=now_ts)
+
+    result = {
         "plan_id": plan_id,
         "output_mode": actual_mode,
         "status": status,
         "has_block": has_block,
         "blocked_output_modes": blocked_output_modes,
+        "supersedes_plan_id": supersedes_plan_id,
         "inputs": {
             "portfolio_snapshot_id": portfolio_snapshot_id,
             "strategy_version_id": strategy_version_id,
@@ -829,6 +872,7 @@ def generate_deployment_plan(
         "snapshot_freshness_band": freshness.band if freshness else None,
         "snapshot_days_old": freshness.days_old if freshness else None,
     }
+    return result
 
 
 def _run_watchlist_review(
@@ -984,3 +1028,177 @@ def get_deployment_plan(*, plan_id: str) -> dict:
     if plan is None:
         raise LookupError(f"no deployment plan {plan_id!r}")
     return plan
+
+
+@tool(
+    name="finance.plan_readiness_check",
+    description=(
+        "Pre-approval gate: re-run current validation on a saved plan, refresh price "
+        "envelopes, and report still_approvable | approval_warning | approval_blocked "
+        "without recomputing allocations. Warn if price drifted >3%; block one-time "
+        "approval if drifted >7%; block if plan has existing block warnings or the "
+        "strategy is no longer active."
+    ),
+)
+def plan_readiness_check(*, plan_id: str) -> dict:
+    plan = _plan_store.get_plan(plan_id)
+    if plan is None:
+        raise LookupError(f"no deployment plan {plan_id!r}")
+
+    plan_status = plan["status"]
+    has_block_warnings = any(w["severity"] == "block" for w in plan.get("warnings", []))
+
+    # Check strategy still active.
+    strategy_active = True
+    strategy_version_id = plan.get("strategy_version_id")
+    if strategy_version_id:
+        version = _store.get_strategy_version(strategy_version_id)
+        strategy_active = version is not None and version.get("status") == "active"
+
+    # Build price drift checks from stored draft prices vs latest prices in DB.
+    bucket_by_line: dict[str, str] = {
+        ln["line_id"]: ln["bucket"] for ln in plan.get("lines", [])
+    }
+    price_checks: list[deployment.PriceCheck] = []
+    for ev in plan.get("evidence", []):
+        if ev["evidence_type"] != "price":
+            continue
+        draft_close_micros = ev.get("draft_close_micros")
+        if draft_close_micros is None:
+            continue
+        ticker = ev["ref_key"]
+        line_id = ev.get("line_id")
+        bucket = bucket_by_line.get(line_id, "dca")
+        current_ref = _plan_store.latest_price_ref(ticker)
+        if current_ref is None:
+            continue
+        current_close = current_ref["close_micros"]
+        drift = (
+            (Decimal(current_close) - Decimal(draft_close_micros))
+            / Decimal(draft_close_micros)
+        )
+        price_checks.append(
+            deployment.PriceCheck(
+                ticker=ticker,
+                bucket=bucket,
+                draft_close_micros=draft_close_micros,
+                current_close_micros=current_close,
+                drift_pct=drift,
+            )
+        )
+
+    readiness = deployment.check_plan_readiness(
+        plan_status=plan_status,
+        has_block_warnings=has_block_warnings,
+        strategy_active=strategy_active,
+        price_checks=price_checks,
+        policy=deployment.PlanPolicy(),
+    )
+
+    return {
+        "plan_id": plan_id,
+        "readiness_status": readiness.status,
+        "approvable": readiness.status in ("still_approvable", "approval_warning"),
+        "blocking_reasons": readiness.blocking_reasons,
+        "warning_reasons": readiness.warning_reasons,
+        "price_checks": [
+            {
+                "ticker": pc.ticker,
+                "bucket": pc.bucket,
+                "draft_close": _micros_to_str(pc.draft_close_micros),
+                "current_close": _micros_to_str(pc.current_close_micros),
+                "drift_pct": str(
+                    (pc.drift_pct * 100).quantize(Decimal("0.01"))
+                ),
+            }
+            for pc in price_checks
+        ],
+    }
+
+
+@tool(
+    name="finance.approve_deployment_plan",
+    description=(
+        "Approve a deployment plan with explicit intent (confirm=True required). "
+        "Plans with any blocking row cannot be approved. Plans with warnings can be "
+        "approved; warnings present at approval time are persisted. Generates a "
+        "separate immutable approved memo under workspace/approved/. "
+        "v1: stops at approval — no execution or order placement."
+    ),
+)
+def approve_deployment_plan(*, plan_id: str, confirm: bool = False) -> dict:
+    if not confirm:
+        raise ValueError(
+            "approve_deployment_plan requires explicit confirmation; "
+            "pass confirm=True to approve this plan"
+        )
+
+    plan = _plan_store.get_plan(plan_id)
+    if plan is None:
+        raise LookupError(f"no deployment plan {plan_id!r}")
+
+    readiness = plan_readiness_check(plan_id=plan_id)
+    if not readiness["approvable"]:
+        raise ValueError(
+            f"plan {plan_id!r} cannot be approved: "
+            + "; ".join(readiness["blocking_reasons"])
+        )
+
+    now_ts = _now()
+    _plan_store.update_plan_status(
+        plan_id, status="approved", now=now_ts, approved_at=now_ts
+    )
+
+    updated_plan = _plan_store.get_plan(plan_id)
+    memo_content = memo.render_approved_memo(updated_plan, approved_at=now_ts)
+    memo_path = memo.write_approved_memo(plan_id, memo_content)
+
+    return {
+        "plan_id": plan_id,
+        "status": "approved",
+        "approved_at": now_ts,
+        "memo_path": str(memo_path),
+    }
+
+
+@tool(
+    name="finance.reject_deployment_plan",
+    description=(
+        "Mark a deployment plan as rejected with a short reason. "
+        "No memo is generated for rejected plans. "
+        "Requires confirm=True and a non-empty reason."
+    ),
+)
+def reject_deployment_plan(
+    *, plan_id: str, reason: str, confirm: bool = False
+) -> dict:
+    if not confirm:
+        raise ValueError(
+            "reject_deployment_plan requires explicit confirmation; pass confirm=True"
+        )
+    if not reason or not reason.strip():
+        raise ValueError("a non-empty rejection reason is required")
+
+    plan = _plan_store.get_plan(plan_id)
+    if plan is None:
+        raise LookupError(f"no deployment plan {plan_id!r}")
+    if plan["status"] in ("approved", "rejected", "superseded"):
+        raise ValueError(
+            f"plan {plan_id!r} is already {plan['status']!r} and cannot be rejected"
+        )
+
+    now_ts = _now()
+    _plan_store.update_plan_status(
+        plan_id,
+        status="rejected",
+        now=now_ts,
+        rejected_at=now_ts,
+        rejection_reason=reason.strip(),
+    )
+
+    return {
+        "plan_id": plan_id,
+        "status": "rejected",
+        "rejection_reason": reason.strip(),
+        "rejected_at": now_ts,
+    }

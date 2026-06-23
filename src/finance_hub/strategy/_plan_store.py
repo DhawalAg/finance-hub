@@ -107,8 +107,9 @@ def persist_plan(
         for e in evidence:
             conn.execute(
                 "INSERT INTO fin_deployment_plan_evidence ("
-                " plan_id, line_id, evidence_type, ref_table, ref_key, summary"
-                ") VALUES (?,?,?,?,?,?)",
+                " plan_id, line_id, evidence_type, ref_table, ref_key, summary,"
+                " draft_close_micros"
+                ") VALUES (?,?,?,?,?,?,?)",
                 (
                     header["plan_id"],
                     e.get("line_id"),
@@ -116,6 +117,7 @@ def persist_plan(
                     e["ref_table"],
                     e["ref_key"],
                     e.get("summary"),
+                    e.get("draft_close_micros"),
                 ),
             )
         conn.commit()
@@ -196,6 +198,36 @@ def latest_price_ref(ticker: str) -> Optional[dict]:
             (ticker,),
         ).fetchone()
         return _row_to_dict(row) if row is not None else None
+
+
+def update_plan_status(
+    plan_id: str,
+    *,
+    status: str,
+    now: str,
+    rejection_reason: Optional[str] = None,
+    approved_at: Optional[str] = None,
+    rejected_at: Optional[str] = None,
+) -> None:
+    """Update a plan's status and optional approval/rejection metadata."""
+    sets = ["status = ?"]
+    params: list = [status]
+    if approved_at is not None:
+        sets.append("approved_at = ?")
+        params.append(approved_at)
+    if rejected_at is not None:
+        sets.append("rejected_at = ?")
+        params.append(rejected_at)
+    if rejection_reason is not None:
+        sets.append("rejection_reason = ?")
+        params.append(rejection_reason)
+    params.append(plan_id)
+    with connection.connect() as conn:
+        conn.execute(
+            f"UPDATE fin_deployment_plans SET {', '.join(sets)} WHERE plan_id = ?",
+            params,
+        )
+        conn.commit()
 
 
 def has_metrics(ticker: str) -> bool:
