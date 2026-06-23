@@ -6,16 +6,19 @@ state. Network-free by default; --live adds a real price fetch.
 """
 from __future__ import annotations
 
+import sqlite3
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping
+from typing import Literal, Mapping
+
+Severity = Literal["green", "yellow", "red"]
 
 
 @dataclass
 class CheckResult:
     name: str
-    severity: str  # "green" | "yellow" | "red"
+    severity: Severity
     message: str
     fix: str | None = None
 
@@ -63,7 +66,6 @@ def _check_python_version(results: list[CheckResult]) -> None:
 
 
 def _check_store(results: list[CheckResult], env: Mapping[str, str]) -> None:
-    import sqlite3 as _sqlite3
     db_path = Path(env.get("FINANCE_HUB_DB", Path.cwd() / "finance-hub.db"))
     if not db_path.exists():
         results.append(CheckResult(
@@ -74,7 +76,7 @@ def _check_store(results: list[CheckResult], env: Mapping[str, str]) -> None:
         ))
         return
     try:
-        with _sqlite3.connect(db_path) as conn:
+        with sqlite3.connect(db_path) as conn:
             row = conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='fin_schema_migrations'"
             ).fetchone()
