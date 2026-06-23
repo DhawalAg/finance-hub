@@ -216,6 +216,27 @@ MIGRATIONS: list[tuple[int, str]] = [
             ON fin_fetch_log (attempted_at);
         """,
     ),
+    (
+        7,
+        """
+        CREATE TABLE IF NOT EXISTS fin_metrics (
+            scope            TEXT NOT NULL,
+            key              TEXT NOT NULL,
+            metric           TEXT NOT NULL,
+            window           TEXT NOT NULL,
+            as_of            TEXT NOT NULL,
+            value            REAL,
+            source           TEXT,
+            grade            TEXT,
+            benchmark_ticker TEXT,
+            PRIMARY KEY (scope, key, metric, window, as_of),
+            CHECK (scope IN ('ticker', 'sleeve', 'portfolio')),
+            CHECK (grade IS NULL OR grade IN ('decision', 'screening'))
+        );
+        CREATE INDEX IF NOT EXISTS ix_fin_metrics_scope_key
+            ON fin_metrics (scope, key);
+        """,
+    ),
 ]
 
 
