@@ -111,7 +111,9 @@ def validate_snapshot_freshness(
     """Compute freshness band and warnings for a portfolio snapshot.
 
     Days are computed from ISO date strings so clock injection is exact (no
-    sub-day rounding). ``portfolio_changed=True`` treats the snapshot as at
+    sub-day rounding). Inputs may be either ``YYYY-MM-DD`` dates or full ISO
+    datetimes (e.g. a snapshot's ``as_of`` timestamp); only the leading date
+    portion is used. ``portfolio_changed=True`` treats the snapshot as at
     least ``stale`` regardless of actual age — per PRD story 78.
 
     Bands (days_old, inclusive):

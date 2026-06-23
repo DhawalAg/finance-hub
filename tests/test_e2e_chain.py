@@ -213,10 +213,10 @@ class TestHappyPathChain:
 
         # --- Step 4: compute and store metrics from stored bars ---
         with connection.connect() as conn:
+            spy_series = M.series_from_bars(conn, "SPY", "yfinance", _AS_OF_DATE)
             for ticker in ("VTI", "NVDA"):
                 series = M.series_from_bars(conn, ticker, "yfinance", _AS_OF_DATE)
                 assert series, f"no bars for {ticker}"
-                spy_series = M.series_from_bars(conn, "SPY", "yfinance", _AS_OF_DATE)
                 mv = M.compute_ticker_metrics(
                     series,
                     ticker=ticker,
