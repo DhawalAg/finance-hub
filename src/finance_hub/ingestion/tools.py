@@ -6,6 +6,7 @@ download line and returns a rich summary of what landed in the snapshot.
 from __future__ import annotations
 
 import csv
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -17,7 +18,7 @@ from finance_hub.strategy.portfolio_snapshot import (
 )
 
 
-def _find_date_downloaded(path: Path):
+def _find_date_downloaded(path: Path) -> Optional[datetime]:
     """Scan a Fidelity CSV file for the 'Date downloaded' line and parse it.
 
     Returns a timezone-aware datetime or None if no such line is found.
@@ -50,6 +51,11 @@ def _count_skipped_pending(path: Path) -> int:
             if "pending" in description.lower():
                 count += 1
     return count
+
+
+def _sorted_tickers(rows, predicate) -> list[str]:
+    """Distinct, sorted, non-empty tickers among ``rows`` matching ``predicate``."""
+    return sorted({r["ticker"] for r in rows if r["ticker"] and predicate(r)})
 
 
 @tool(
@@ -93,10 +99,10 @@ def import_portfolio_csv(
             (snapshot_id,),
         ).fetchall()
 
-    supported_tickers = sorted({r["ticker"] for r in positions if r["is_supported"] and r["ticker"]})
-    cash_tickers = sorted({r["ticker"] for r in positions if r["asset_type"] == "cash" and r["ticker"]})
-    unsupported_tickers = sorted(
-        {r["ticker"] for r in positions if not r["is_supported"] and r["asset_type"] != "cash" and r["ticker"]}
+    supported = _sorted_tickers(positions, lambda r: r["is_supported"])
+    cash = _sorted_tickers(positions, lambda r: r["asset_type"] == "cash")
+    unsupported = _sorted_tickers(
+        positions, lambda r: not r["is_supported"] and r["asset_type"] != "cash"
     )
 
     return {
@@ -104,9 +110,9 @@ def import_portfolio_csv(
         "as_of": effective_as_of,
         "as_of_source": as_of_source,
         "buckets": {
-            "supported": {"count": len(supported_tickers), "tickers": supported_tickers},
-            "cash": {"count": len(cash_tickers), "tickers": cash_tickers},
-            "unsupported": {"count": len(unsupported_tickers), "tickers": unsupported_tickers},
+            "supported": {"count": len(supported), "tickers": supported},
+            "cash": {"count": len(cash), "tickers": cash},
+            "unsupported": {"count": len(unsupported), "tickers": unsupported},
             "skipped": {"count": skipped_count, "tickers": []},
         },
     }
