@@ -9,7 +9,11 @@ import json
 
 import typer
 
+from finance_hub import bootstrap as _bootstrap
 from finance_hub.runtime import registry
+
+_bootstrap.load_dotenv()
+_bootstrap.bootstrap()
 
 app = typer.Typer(help="finance-hub: run finance capabilities from the shell.")
 registry.load_all()

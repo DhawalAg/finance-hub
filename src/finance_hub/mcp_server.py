@@ -6,7 +6,11 @@ from __future__ import annotations
 
 from mcp.server.fastmcp import FastMCP
 
+from finance_hub import bootstrap as _bootstrap
 from finance_hub.runtime import registry
+
+_bootstrap.load_dotenv()
+_bootstrap.bootstrap()
 
 registry.load_all()
 
