@@ -282,6 +282,82 @@ MIGRATIONS: list[tuple[int, str]] = [
         );
         """,
     ),
+    (
+        9,
+        """
+        CREATE TABLE fin_deployment_plans (
+            plan_id                    TEXT PRIMARY KEY,
+            output_mode                TEXT NOT NULL,
+            status                     TEXT NOT NULL,
+            portfolio_snapshot_id      TEXT NOT NULL,
+            strategy_version_id        TEXT NOT NULL,
+            benchmark_ticker           TEXT NOT NULL,
+            risk_mode                  TEXT NOT NULL,
+            dca_cadence                TEXT,
+            deployable_cash_micros     INTEGER NOT NULL,
+            dca_budget_micros          INTEGER NOT NULL,
+            one_time_buy_budget_micros INTEGER NOT NULL,
+            dca_unallocated_micros     INTEGER NOT NULL DEFAULT 0,
+            one_time_unallocated_micros INTEGER NOT NULL DEFAULT 0,
+            total_unallocated_micros   INTEGER NOT NULL DEFAULT 0,
+            effective_policy           TEXT NOT NULL,
+            supersedes_plan_id         TEXT,
+            created_at                 TEXT NOT NULL,
+            FOREIGN KEY (portfolio_snapshot_id)
+                REFERENCES fin_portfolio_snapshots(snapshot_id),
+            FOREIGN KEY (strategy_version_id)
+                REFERENCES fin_strategy_versions(version_id),
+            CHECK (output_mode IN ('deployment_draft')),
+            CHECK (status IN ('proposed', 'proposed_with_warnings'))
+        );
+
+        CREATE TABLE fin_deployment_plan_lines (
+            line_id        TEXT PRIMARY KEY,
+            plan_id        TEXT NOT NULL REFERENCES fin_deployment_plans(plan_id),
+            bucket         TEXT NOT NULL,
+            ticker         TEXT NOT NULL,
+            sleeve_key     TEXT,
+            amount_micros  INTEGER NOT NULL,
+            rank           INTEGER NOT NULL,
+            ranked_factors TEXT NOT NULL,
+            rationale      TEXT,
+            created_at     TEXT NOT NULL,
+            CHECK (bucket IN ('dca', 'one_time')),
+            CHECK (amount_micros > 0)
+        );
+
+        CREATE INDEX idx_fin_deployment_plan_lines_plan
+            ON fin_deployment_plan_lines(plan_id);
+
+        CREATE TABLE fin_deployment_plan_warnings (
+            id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            plan_id   TEXT NOT NULL REFERENCES fin_deployment_plans(plan_id),
+            code      TEXT NOT NULL,
+            severity  TEXT NOT NULL,
+            ticker    TEXT,
+            message   TEXT NOT NULL,
+            CHECK (severity IN ('warning', 'block'))
+        );
+
+        CREATE INDEX idx_fin_deployment_plan_warnings_plan
+            ON fin_deployment_plan_warnings(plan_id);
+
+        CREATE TABLE fin_deployment_plan_evidence (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            plan_id       TEXT NOT NULL REFERENCES fin_deployment_plans(plan_id),
+            line_id       TEXT REFERENCES fin_deployment_plan_lines(line_id),
+            evidence_type TEXT NOT NULL,
+            ref_table     TEXT NOT NULL,
+            ref_key       TEXT NOT NULL,
+            summary       TEXT,
+            CHECK (evidence_type IN
+                ('price', 'metric', 'fundamental', 'research_note', 'research_source'))
+        );
+
+        CREATE INDEX idx_fin_deployment_plan_evidence_plan
+            ON fin_deployment_plan_evidence(plan_id);
+        """,
+    ),
 ]
 
 
