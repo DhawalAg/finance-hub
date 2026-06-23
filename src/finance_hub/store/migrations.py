@@ -201,6 +201,52 @@ MIGRATIONS: list[tuple[int, str]] = [
             ON fin_portfolio_positions(snapshot_id);
         """,
     ),
+    (
+        6,
+        """
+        CREATE TABLE fin_strategy_versions (
+            version_id TEXT PRIMARY KEY,
+            label      TEXT,
+            status     TEXT NOT NULL DEFAULT 'draft',
+            notes      TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            CHECK (status IN ('draft', 'active', 'archived'))
+        );
+
+        -- At most one active strategy version at a time (ADR 0003, strategy spec §4).
+        CREATE UNIQUE INDEX ux_fin_strategy_versions_active
+            ON fin_strategy_versions(status) WHERE status = 'active';
+
+        CREATE TABLE fin_strategy_sleeves (
+            version_id        TEXT NOT NULL REFERENCES fin_strategy_versions(version_id),
+            sleeve_key        TEXT NOT NULL,
+            display_name      TEXT,
+            target_weight_bps INTEGER NOT NULL,
+            hard_cap_bps      INTEGER,
+            created_at        TEXT NOT NULL,
+            PRIMARY KEY (version_id, sleeve_key),
+            CHECK (target_weight_bps >= 0),
+            CHECK (hard_cap_bps IS NULL OR hard_cap_bps >= 0)
+        );
+
+        CREATE TABLE fin_strategy_instruments (
+            version_id         TEXT NOT NULL REFERENCES fin_strategy_versions(version_id),
+            ticker             TEXT NOT NULL,
+            primary_sleeve_key TEXT NOT NULL,
+            instrument_role    TEXT,
+            conviction         INTEGER,
+            source_theme_key   TEXT,
+            hard_cap_bps       INTEGER,
+            note               TEXT,
+            created_at         TEXT NOT NULL,
+            PRIMARY KEY (version_id, ticker),
+            FOREIGN KEY (version_id, primary_sleeve_key)
+                REFERENCES fin_strategy_sleeves(version_id, sleeve_key),
+            CHECK (hard_cap_bps IS NULL OR hard_cap_bps >= 0)
+        );
+        """,
+    ),
 ]
 
 
