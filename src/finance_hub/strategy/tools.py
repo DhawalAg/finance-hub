@@ -414,6 +414,11 @@ def _bucket_json(res) -> dict:
     }
 
 
+def _warning_dict(w) -> dict:
+    """Flatten a deployment.Warning into the plain dict used in plan JSON/storage."""
+    return {"code": w.code, "severity": w.severity, "ticker": w.ticker, "message": w.message}
+
+
 def _empty_bucket_json(bucket: str, budget_micros: int) -> dict:
     return {
         "bucket": bucket,
@@ -706,20 +711,11 @@ def generate_deployment_plan(
 
     # Freshness warnings come first (they govern which modes are allowed).
     if freshness is not None:
-        for w in freshness.warnings:
-            all_warnings.append(
-                {"code": w.code, "severity": w.severity, "ticker": w.ticker,
-                 "message": w.message}
-            )
+        all_warnings.extend(_warning_dict(w) for w in freshness.warnings)
 
     # Unknown-sleeve block warning (if triggered).
     if unknown_block_warning is not None:
-        all_warnings.append(
-            {"code": unknown_block_warning.code,
-             "severity": unknown_block_warning.severity,
-             "ticker": unknown_block_warning.ticker,
-             "message": unknown_block_warning.message}
-        )
+        all_warnings.append(_warning_dict(unknown_block_warning))
 
     # Engine warnings (concentration, MARKET_DATA_MISSING, etc.).
     for w in computation.warnings:
@@ -727,27 +723,26 @@ def generate_deployment_plan(
         # emitted a block-level one for the same condition.
         if w.code == deployment.UNKNOWN_SLEEVE_EXPOSURE and unknown_block_warning:
             continue
-        all_warnings.append(
-            {"code": w.code, "severity": w.severity, "ticker": w.ticker,
-             "message": w.message}
-        )
+        all_warnings.append(_warning_dict(w))
 
     has_block = any(w["severity"] == "block" for w in all_warnings)
 
-    # Status resolution: advisory_only > blocked > proposed_with_warnings > proposed.
+    # Status resolution: advisory_only outranks any warning; block-severity
+    # warnings stay in the list but still surface as proposed_with_warnings.
     if advisory_only:
         status = "advisory_only"
-    elif has_block:
-        status = "proposed_with_warnings"  # block warnings appear in the list
     elif all_warnings:
         status = "proposed_with_warnings"
     else:
         status = "proposed"
 
+    # When freshness zeroed the one-time budget, report the original budget as
+    # unallocated rather than the (empty) engine bucket's figure.
+    one_time_zeroed_by_freshness = effective_one_time_micros == 0 and one_time_micros > 0
     dca_unalloc = computation.buckets["dca"].unallocated_micros
     one_time_unalloc = (
-        one_time_micros  # if one_time was zeroed by freshness, show original budget
-        if effective_one_time_micros == 0 and one_time_micros > 0
+        one_time_micros
+        if one_time_zeroed_by_freshness
         else computation.buckets["one_time"].unallocated_micros
     )
 
@@ -814,7 +809,7 @@ def generate_deployment_plan(
             "dca": _bucket_json(computation.buckets["dca"]),
             "one_time": (
                 _empty_bucket_json("one_time", one_time_micros)
-                if effective_one_time_micros == 0 and one_time_micros > 0
+                if one_time_zeroed_by_freshness
                 else _bucket_json(computation.buckets["one_time"])
             ),
         },
@@ -857,11 +852,7 @@ def _run_watchlist_review(
     all_warnings: list[dict] = []
 
     if freshness is not None:
-        for w in freshness.warnings:
-            all_warnings.append(
-                {"code": w.code, "severity": w.severity, "ticker": w.ticker,
-                 "message": w.message}
-            )
+        all_warnings.extend(_warning_dict(w) for w in freshness.warnings)
 
     # Determine the candidate universe: strategy instruments if available,
     # else all research candidates.
@@ -894,11 +885,12 @@ def _run_watchlist_review(
             )
     else:
         # No strategy: scan all research candidates.
+        seen: set[str] = set()
         for cand in research_store.list_candidates(include_rejected=False):
             ticker = cand["ticker"]
-            seen = {c["ticker"] for c in candidates_out}
             if ticker in seen:
                 continue
+            seen.add(ticker)
             has_price = _plan_store.latest_price_ref(ticker) is not None
             if not has_price:
                 all_warnings.append(
