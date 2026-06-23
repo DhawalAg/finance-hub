@@ -201,6 +201,21 @@ MIGRATIONS: list[tuple[int, str]] = [
             ON fin_portfolio_positions(snapshot_id);
         """,
     ),
+    (
+        6,
+        """
+        CREATE TABLE IF NOT EXISTS fin_fetch_log (
+            id           INTEGER PRIMARY KEY,
+            ticker       TEXT,
+            attempted_at TEXT NOT NULL,
+            source       TEXT,
+            ok           INTEGER NOT NULL CHECK (ok IN (0, 1)),
+            error        TEXT
+        );
+        CREATE INDEX IF NOT EXISTS ix_fin_fetch_log_attempted
+            ON fin_fetch_log (attempted_at);
+        """,
+    ),
 ]
 
 

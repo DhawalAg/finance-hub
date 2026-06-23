@@ -115,6 +115,26 @@ class TestFinPriceBarsConstraints:
             with pytest.raises(sqlite3.IntegrityError):
                 _insert_bar(conn, currency="GBP")
 
+    def test_fin_fetch_log_table_and_shape(self, db_path):
+        """Slice 4 (issue #6): the snapshot reliability trip-wire log."""
+        migrations.run()
+        with connection.connect() as conn:
+            assert conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='fin_fetch_log'"
+            ).fetchone() is not None
+            cols = {c["name"]: c for c in conn.execute("PRAGMA table_info(fin_fetch_log)")}
+        assert set(cols) == {"id", "ticker", "attempted_at", "source", "ok", "error"}
+        assert cols["ok"]["notnull"] == 1
+        assert cols["attempted_at"]["notnull"] == 1
+
+    def test_fin_fetch_log_rejects_non_binary_ok(self, db_path):
+        migrations.run()
+        with connection.connect() as conn:
+            with pytest.raises(sqlite3.IntegrityError):
+                conn.execute(
+                    "INSERT INTO fin_fetch_log (attempted_at, ok) VALUES ('2026-06-22T00:00:00Z', 2)"
+                )
+
     def test_upsert_refreshes_adj_close(self, db_path):
         """Same-key re-fetch is idempotent and may refresh adj_close + last_refreshed_at."""
         migrations.run()
