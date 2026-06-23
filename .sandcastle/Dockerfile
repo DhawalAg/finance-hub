@@ -33,7 +33,10 @@ RUN python -m venv $VIRTUAL_ENV
 # Install Claude Code CLI
 RUN curl -fsSL https://claude.ai/install.sh | bash
 
-# Add the virtualenv and Claude Code CLI to PATH.
+# Install Codex CLI so the sandbox can run Codex-backed Sandcastle agents too.
+RUN curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh
+
+# Add the virtualenv, Claude Code CLI, and Codex CLI to PATH.
 ENV PATH="$VIRTUAL_ENV/bin:/home/agent/.local/bin:$PATH"
 
 WORKDIR /home/agent

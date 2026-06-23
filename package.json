@@ -7,6 +7,6 @@
     "zod": "^4.4.3"
   },
   "scripts": {
-    "sandcastle": "npx tsx .sandcastle/main.mts"
+    "sandcastle": "node --env-file=.sandcastle/.env --import tsx .sandcastle/main.mts"
   }
 }
