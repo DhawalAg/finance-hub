@@ -120,8 +120,8 @@ def validate_snapshot_freshness(
       15-30 stale              — PORTFOLIO_SNAPSHOT_STALE warning; one_time_blocked=True
       >30   too_stale_for_one_time — PORTFOLIO_SNAPSHOT_TOO_OLD_FOR_ONE_TIME block
     """
-    snap_date = date.fromisoformat(snapshot_as_of)
-    ref_date = date.fromisoformat(as_of)
+    snap_date = date.fromisoformat(snapshot_as_of[:10])
+    ref_date = date.fromisoformat(as_of[:10])
     days_old = max(0, (ref_date - snap_date).days)
 
     effective_days = max(days_old, 15) if portfolio_changed else days_old
