@@ -114,17 +114,14 @@ def get_strategy_version(version_id: str) -> Optional[dict]:
 
 
 def list_strategy_versions(*, status: Optional[str] = None) -> list[dict]:
-    clauses: list[str] = []
+    sql = "SELECT * FROM fin_strategy_versions"
     params: list[Any] = []
     if status is not None:
-        clauses.append("status = ?")
+        sql += " WHERE status = ?"
         params.append(status)
-    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    sql += " ORDER BY version_id"
     with connection.connect() as conn:
-        rows = conn.execute(
-            f"SELECT * FROM fin_strategy_versions{where} ORDER BY version_id",
-            params,
-        ).fetchall()
+        rows = conn.execute(sql, params).fetchall()
     return [_row_to_dict(r) for r in rows]
 
 

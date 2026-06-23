@@ -269,18 +269,18 @@ def check_strategy_deployable(*, version_id: str) -> dict:
     version = _store.get_strategy_version(version_id)
     if version is None:
         raise LookupError(f"no strategy version {version_id!r}")
-    total = sum(s["target_weight_bps"] for s in version["sleeves"])
+    version = _with_completeness(version)
     reasons: list[str] = []
     if version["status"] != "active":
         reasons.append(f"strategy status is {version['status']!r}, not 'active'")
-    if total != _FULL_ALLOCATION_BPS:
+    if not version["targets_complete"]:
         reasons.append(
-            f"sleeve targets sum to {_bps_to_pct_str(total)}%, not 100%"
+            f"sleeve targets sum to {version['targets_sum_pct']}%, not 100%"
         )
     return {
         "version_id": version_id,
         "status": version["status"],
         "deployable": not reasons,
-        "targets_sum_pct": _bps_to_pct_str(total),
+        "targets_sum_pct": version["targets_sum_pct"],
         "reasons": reasons,
     }
