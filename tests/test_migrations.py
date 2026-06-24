@@ -134,6 +134,30 @@ class TestAutoMigrateOnConnect:
         assert applied == len(migrations.MIGRATIONS)
 
 
+class TestLegacyTextAffinityMigrationsTable:
+    """A pre-pivot skeleton DB may have fin_schema_migrations.version as TEXT,
+    so applied versions read back as strings. run() must stay idempotent and
+    not re-insert (which would raise a UNIQUE violation)."""
+
+    def _seed_text_affinity_table(self):
+        # version is TEXT here (the legacy skeleton shape), unlike current INTEGER.
+        with connection._open() as conn:
+            conn.executescript(
+                "CREATE TABLE fin_schema_migrations ("
+                "  version TEXT PRIMARY KEY, applied_at TEXT NOT NULL);"
+            )
+            conn.commit()
+
+    def test_run_idempotent_against_text_versions(self, db_path):
+        self._seed_text_affinity_table()
+        migrations.run()           # first pass: applies + records all versions
+        migrations.run()           # second pass must be a clean no-op, not UNIQUE-fail
+        with connection.connect() as conn:
+            applied = migrations._applied_versions(conn)
+        assert applied == {v for v, _ in migrations.MIGRATIONS}
+        assert all(isinstance(v, int) for v in applied)
+
+
 class TestNoGlobalUserVersion:
     def test_user_version_not_used_as_state(self, db_path):
         migrations.run()

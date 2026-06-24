@@ -477,7 +477,11 @@ def _applied_versions(conn) -> set[int]:
     ).fetchone()
     if row is None:
         return set()
-    return {r[0] for r in conn.execute("SELECT version FROM fin_schema_migrations")}
+    # Coerce to int: a fin_schema_migrations table left over from the pre-pivot
+    # skeleton may have TEXT affinity, so stored versions come back as strings
+    # ('1' != 1). Without this, every migration looks unapplied and re-running
+    # raises a UNIQUE violation on the already-present version.
+    return {int(r[0]) for r in conn.execute("SELECT version FROM fin_schema_migrations")}
 
 
 def run() -> None:
