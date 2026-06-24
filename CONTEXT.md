@@ -12,10 +12,19 @@ explicit deployable cash, research candidates, market-data evidence, and an acti
 reviewable buy-only plan for DCA and one-time buys. Live account integrations, capital-policy
 automation, trade execution, tax workflows, and account-location optimization come later.
 
-The runtime, finance-owned migrations, research evidence layer, market-data evidence layer,
-portfolio-snapshot intake, and strategy-promotion model are in place. The current implementation
-frontier is the deployment recommendation itself: deterministic draft generation, output-mode
-degradation, readiness checks, approval, and memo artifacts.
+The full DCA deployment recommendation pipeline is in place and usable end-to-end:
+
+- **Runtime and data layer**: tool registry, SQLite store with migrations, research evidence layer,
+  market-data evidence layer, portfolio-snapshot intake (Fidelity CSV adapter), and
+  strategy-promotion model.
+- **Deployment recommendation**: deterministic draft generation, output-mode degradation, readiness
+  checks, approval, and memo artifacts.
+- **Bootstrapping seam**: `.env` self-loading, lazy yfinance auto-wiring, `finance check` diagnostic,
+  `finance.import_portfolio_csv` registered tool, MCP client setup docs, and README quickstart.
+
+The current implementation frontier is the **live fundamentals HTTP client** (EODHD / Alpha Vantage).
+It is the immediate next step — it unlocks one-time buys, which require fundamentals screening. DCA
+flows run end-to-end without it.
 
 ## Language
 
