@@ -38,7 +38,11 @@ def _find_date_downloaded(path: Path) -> Optional[datetime]:
 
 
 def _count_skipped_pending(path: Path) -> int:
-    """Count rows with 'Pending activity' in Description — rows the adapter skips."""
+    """Count 'Pending activity' rows the adapter skips.
+
+    Fidelity may carry the marker in either the Symbol or the Description
+    column, so check both — matching the adapter's own skip rule.
+    """
     count = 0
     with path.open(newline="", encoding="utf-8", errors="replace") as f:
         reader = csv.DictReader(f)
@@ -48,7 +52,7 @@ def _count_skipped_pending(path: Path) -> int:
             if not account_name and not ticker_raw:
                 continue  # blank / footer rows
             description = (row.get("Description") or "").strip()
-            if "pending" in description.lower():
+            if "pending" in description.lower() or "pending" in ticker_raw.lower():
                 count += 1
     return count
 

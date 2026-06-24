@@ -38,17 +38,23 @@ _MONTH_ABBR: dict[str, int] = {
     "sep": 9, "oct": 10, "nov": 11, "dec": 12,
 }
 
+# The meridiem's trailing period is optional: real Fidelity exports write
+# "6:29 p.m ET" while the documented form is "10:30 a.m. ET". Match either,
+# case-insensitively, and key the AM/PM decision off the leading letter.
 _DATE_DOWNLOADED_RE = re.compile(
     r'Date downloaded\s+([A-Za-z]+)-(\d{1,2})-(\d{4})'
-    r'\s+(\d{1,2}):(\d{2})\s+(a\.m\.|p\.m\.)\s+ET'
+    r'\s+(\d{1,2}):(\d{2})\s+([ap])\.m\.?\s+ET',
+    re.IGNORECASE,
 )
 
 
 def parse_date_downloaded(line: str) -> datetime:
     """Parse a Fidelity 'Date downloaded' line into a timezone-aware datetime.
 
-    Accepts the bare or quoted form:
+    Accepts the bare or quoted form, with or without the meridiem's trailing
+    period (both occur in real exports):
         Date downloaded Jun-22-2026 10:30 a.m. ET
+        Date downloaded Jun-23-2026 6:29 p.m ET
         "Date downloaded Jun-22-2026 10:30 a.m. ET"
 
     The timezone is America/New_York (Fidelity always writes literal 'ET').
@@ -57,14 +63,15 @@ def parse_date_downloaded(line: str) -> datetime:
     m = _DATE_DOWNLOADED_RE.search(line)
     if not m:
         raise ValueError(f"Cannot parse Date downloaded line: {line!r}")
-    month_abbr, day, year, hour, minute, ampm = m.groups()
+    month_abbr, day, year, hour, minute, meridiem = m.groups()
     month = _MONTH_ABBR.get(month_abbr.lower())
     if not month:
         raise ValueError(f"Unknown month abbreviation: {month_abbr!r}")
     h = int(hour)
-    if ampm == "p.m." and h != 12:
+    is_pm = meridiem.lower() == "p"
+    if is_pm and h != 12:
         h += 12
-    elif ampm == "a.m." and h == 12:
+    elif not is_pm and h == 12:
         h = 0
     return datetime(
         int(year), month, int(day), h, int(minute),
@@ -110,16 +117,20 @@ def _infer_asset_type(ticker: str, description: str) -> tuple[str, bool]:
 
     skip=True means the row should not be persisted (e.g. Pending activity).
     Classification rules (applied in order):
-      1. "pending" in description → skip
+      1. "pending" in the ticker or description → skip
       2. Ticker starts with FCASH or "fcash" in description → cash
       3. "etf" in description → etf
       4. Non-empty ticker → stock
       5. Fallback → unknown
+
+    Real Fidelity exports put "Pending activity" in the Symbol column with an
+    empty Description, so the pending check must look at the ticker too.
     """
     desc_lower = (description or "").lower().strip()
     ticker_upper = (ticker or "").upper()
+    ticker_lower = ticker_upper.lower()
 
-    if "pending" in desc_lower:
+    if "pending" in desc_lower or "pending" in ticker_lower:
         return "cash", True
 
     if ticker_upper.startswith("FCASH") or "fcash" in desc_lower:

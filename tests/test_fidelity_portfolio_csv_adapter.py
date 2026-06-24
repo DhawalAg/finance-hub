@@ -263,6 +263,27 @@ class TestAssetTypeInferredFromDescription:
             ).fetchone()[0]
         assert count == 1
 
+    def test_pending_activity_in_symbol_column_skipped(self, db_path, tmp_path):
+        # Real Fidelity exports put "Pending activity" in the Symbol column
+        # with an empty Description (the prior test covered the inverse).
+        csv = _write_csv(
+            tmp_path,
+            HEADER
+            + 'X1,Brokerage,AAPL,"Apple Inc",10,$190.00,$1900.00,$1500.00,Cash\n'
+            + 'X1,Individual,Pending activity,,,,,$2.32,,,,,,,,,\n',
+        )
+        snapshot_id = FidelityPortfolioCsvAdapter().import_csv(
+            csv, as_of="2026-06-23T18:29:00-04:00"
+        )
+        with connection.connect() as conn:
+            rows = conn.execute(
+                "SELECT ticker FROM fin_portfolio_positions WHERE snapshot_id=?",
+                (snapshot_id,),
+            ).fetchall()
+        tickers = {r["ticker"] for r in rows}
+        assert tickers == {"AAPL"}
+        assert "Pending activity" not in tickers
+
     def test_account_registration_stored_from_type_column(self, db_path, tmp_path):
         csv = _write_csv(
             tmp_path,
@@ -310,6 +331,18 @@ class TestParseDateDownloaded:
         dt = parse_date_downloaded('"Date downloaded Jun-22-2026 10:30 a.m. ET"')
         assert dt.year == 2026
         assert dt.month == 6
+
+    def test_meridiem_without_trailing_period(self):
+        # Real Fidelity exports write "p.m"/"a.m" with no trailing period.
+        dt = parse_date_downloaded("Date downloaded Jun-23-2026 6:29 p.m ET")
+        assert (dt.year, dt.month, dt.day) == (2026, 6, 23)
+        assert dt.hour == 18
+        assert dt.minute == 29
+
+    def test_am_without_trailing_period(self):
+        dt = parse_date_downloaded('"Date downloaded Jun-23-2026 9:05 a.m ET"')
+        assert dt.hour == 9
+        assert dt.minute == 5
 
 
 class TestRealSampleFixture:
