@@ -64,15 +64,15 @@ research layer. Typical sequence:
 ```bash
 # Create a research theme
 finance run finance.set_theme \
-  --args '{"key": "us-large-cap", "name": "US Large Cap", "status": "active"}'
+  --args '{"key": "us-large-cap", "display_name": "US Large Cap", "status": "watching"}'
 
 # Attach candidate instruments
 finance run finance.map_instruments \
-  --args '{"theme_key": "us-large-cap", "tickers": ["WMT", "NVDA", "AVGO"]}'
+  --args '{"theme_key": "us-large-cap", "instruments": [{"ticker": "WMT", "instrument_role": "single_stock"}, {"ticker": "NVDA", "instrument_role": "single_stock"}, {"ticker": "AVGO", "instrument_role": "single_stock"}]}'
 
-# Mark candidates reviewed with conviction
+# Mark candidates reviewed with conviction (a conviction score requires a note)
 finance run finance.review_instrument \
-  --args '{"ticker": "WMT", "status": "approved", "rationale": "defensive anchor", "conviction": 4}'
+  --args '{"theme_key": "us-large-cap", "ticker": "WMT", "status": "approved", "rationale": "defensive anchor", "conviction": 4, "conviction_note": "stable cash flows through cycles"}'
 
 # Write a thesis note
 finance run finance.set_research_note \
@@ -89,19 +89,20 @@ finance run finance.research_priorities --args '{}'
 
 ```bash
 finance run finance.promote_to_strategy --args '{
-  "sleeves": [{"key": "core", "name": "Core", "target_pct": 100}],
+  "version_id": "v1",
+  "sleeves": [{"sleeve_key": "core", "display_name": "Core", "target_weight_pct": 100}],
   "instruments": [
-    {"ticker": "WMT", "sleeve_key": "core", "target_pct": 60},
-    {"ticker": "NVDA", "sleeve_key": "core", "target_pct": 40}
+    {"ticker": "WMT", "primary_sleeve_key": "core"},
+    {"ticker": "NVDA", "primary_sleeve_key": "core"}
   ],
   "confirm": true
 }'
 ```
 
-Note the `version_id` returned, then activate it:
+You choose the `version_id` (here `v1`); it is echoed back in the result. Activate it:
 
 ```bash
-finance run finance.activate_strategy --args '{"version_id": "<version_id>", "confirm": true}'
+finance run finance.activate_strategy --args '{"version_id": "v1", "confirm": true}'
 ```
 
 ### 7. Take a price snapshot
@@ -120,10 +121,11 @@ print(result)
 
 ```bash
 finance run finance.generate_deployment_plan --args '{
-  "strategy_version_id": "<version_id>",
+  "strategy_version_id": "v1",
   "portfolio_snapshot_id": "<snapshot_id>",
-  "total_investment_usd": "5000.00",
-  "output_mode": "dca_only"
+  "deployable_cash": "5000.00",
+  "dca_budget": "5000.00",
+  "requested_output_mode": "deployment_draft"
 }'
 ```
 
