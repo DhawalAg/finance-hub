@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Thin wrapper around the finance CLI entry point.
+# When $CLAUDE_JOB_DIR is set (i.e. Claude is running this), output is teed to
+# a log file so the user can watch live with `tail -f <log>` in their terminal.
+# Outside that context the command runs normally with no overhead.
+set -euo pipefail
+
+REAL="$(dirname "$0")/../py3env/bin/finance"
+
+if [[ -n "${CLAUDE_JOB_DIR:-}" ]]; then
+    LOG="$CLAUDE_JOB_DIR/tmp/finance-$(date +%s).log"
+    echo "Watching: tail -f $LOG"
+    "$REAL" "$@" 2>&1 | tee "$LOG"
+    exit "${PIPESTATUS[0]}"
+else
+    exec "$REAL" "$@"
+fi
