@@ -99,6 +99,41 @@ class TestForeignKeysEnforced:
                 conn.execute("INSERT INTO _c (id, n) VALUES (1, -1)")
 
 
+class TestAutoMigrateOnConnect:
+    """A fresh install must work without a separate migrate step: the first
+    connect() applies pending migrations so any tool can write immediately."""
+
+    def test_connect_applies_migrations_without_explicit_run(self, db_path):
+        # No migrations.run() / init() call — connect() must self-bootstrap.
+        with connection.connect() as conn:
+            row = conn.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type='table' AND name='fin_portfolio_snapshots'"
+            ).fetchone()
+        assert row is not None, "connect() should have created the schema"
+
+    def test_write_tool_path_works_on_fresh_db(self, db_path):
+        # Mirrors what an ingestion/strategy tool does: connect then insert.
+        with connection.connect() as conn:
+            conn.execute(
+                "INSERT INTO fin_portfolio_snapshots "
+                "(snapshot_id, as_of, source_adapter, source_file, created_at) "
+                "VALUES ('s1', '2026-06-24T00:00:00Z', 'test', 'f.csv', '2026-06-24T00:00:00Z')"
+            )
+            conn.commit()
+            count = conn.execute("SELECT COUNT(*) FROM fin_portfolio_snapshots").fetchone()[0]
+        assert count == 1
+
+    def test_migration_runner_does_not_recurse(self, db_path):
+        # connect() inside the migration runner must not trigger another pass.
+        connection.connect().close()
+        with connection.connect() as conn:
+            applied = conn.execute(
+                "SELECT COUNT(*) FROM fin_schema_migrations"
+            ).fetchone()[0]
+        assert applied == len(migrations.MIGRATIONS)
+
+
 class TestNoGlobalUserVersion:
     def test_user_version_not_used_as_state(self, db_path):
         migrations.run()
