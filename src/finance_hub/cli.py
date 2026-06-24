@@ -1,13 +1,15 @@
 """CLI surface over the tool registry.
 
-    finance tools                       list every registered tool
-    finance run <name> --args '<json>'  invoke a tool with JSON kwargs
-    finance check [--live]              read-only setup diagnostic
+    finance tools                         list every registered tool
+    finance run <name> [--key value ...]  invoke a tool; flags become kwargs
+    finance run <name> --args '<json>'    legacy JSON form (still works)
+    finance check [--live]                read-only setup diagnostic
 """
 from __future__ import annotations
 
 import json
 import os
+from typing import Optional
 
 import typer
 
@@ -56,11 +58,56 @@ def list_tools() -> None:
         typer.echo(f"{t.name:28}  {t.description}")
 
 
-@app.command("run")
-def run(name: str, args: str = typer.Option("{}", help="JSON object of keyword args.")) -> None:
-    """Invoke a tool by name with JSON kwargs."""
+def _parse_extra_flags(extra: list[str]) -> dict:
+    """Convert ['--foo', 'bar', '--baz', 'qux'] into {'foo': 'bar', 'baz': 'qux'}.
+
+    Values that look like JSON (objects, arrays, numbers, booleans, null) are
+    decoded so callers don't need to quote them.
+    """
+    kwargs: dict = {}
+    it = iter(extra)
+    for token in it:
+        if not token.startswith("--"):
+            raise typer.BadParameter(f"unexpected positional argument: {token!r}")
+        key = token.lstrip("-").replace("-", "_")
+        try:
+            raw = next(it)
+        except StopIteration:
+            raise typer.BadParameter(f"flag --{key} has no value")
+        try:
+            kwargs[key] = json.loads(raw)
+        except json.JSONDecodeError:
+            kwargs[key] = raw
+    return kwargs
+
+
+@app.command("run", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+def run(
+    ctx: typer.Context,
+    name: str,
+    args: Optional[str] = typer.Option(None, help="JSON object of keyword args (legacy form)."),
+) -> None:
+    """Invoke a tool by name.
+
+    Preferred: pass kwargs as flags —
+        finance run finance.get_theme --key ai_infrastructure
+
+    Legacy JSON form still works —
+        finance run finance.get_theme --args '{"key":"ai_infrastructure"}'
+
+    Flag values are auto-decoded from JSON when they look like JSON
+    (numbers, booleans, objects, arrays); otherwise treated as strings.
+    Both forms can be combined — extra flags take precedence over --args keys.
+    """
+    if args is not None and ctx.args:
+        kwargs = {**json.loads(args), **_parse_extra_flags(ctx.args)}
+    elif args is not None:
+        kwargs = json.loads(args)
+    else:
+        kwargs = _parse_extra_flags(ctx.args)
+
     tool = registry.get(name)
-    result = tool.fn(**json.loads(args))
+    result = tool.fn(**kwargs)
     typer.echo(json.dumps(result, indent=2, default=str) if not isinstance(result, str) else result)
 
 
