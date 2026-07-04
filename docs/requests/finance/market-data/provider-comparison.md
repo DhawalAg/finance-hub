@@ -221,9 +221,16 @@ V1 Alpha Vantage smoke test (done 2026-07-04, passing):
 
 - Providers: Alpha Vantage (free `OVERVIEW`) plus SEC/edgartools for filing-grounded spot checks.
 - Tickers: verified live against NVDA; extend to AAPL, MSFT, JPM or BAC, AMZN or GOOGL for coverage.
-- Fields confirmed on the free tier: revenue growth, margin/profitability, P/S, EV/EBITDA — with
-  source/as_of. Not in one free `OVERVIEW` call: forward P/S, debt/cash, next earnings date (need
-  extra AV endpoints or a paid provider); these surface as explicit gaps, never agent-filled numbers.
+- **Per-call harvest:** one free `OVERVIEW` call returns ~55 fields; we normalize **33** of them
+  (verified live on NVDA) — valuation (P/E, forward P/E, PEG, P/B, P/S, EV/EBITDA, EV/Rev),
+  returns/margins (ROE, ROA, operating margin, gross profit, net margin), growth (revenue + earnings
+  YoY), size (market cap, revenue, EBITDA, EPS, book value, shares), dividend (yield, per-share,
+  ex-date), risk (beta, 52wk hi/lo, 50/200-day MAs), analyst (target price + rating spread), and
+  sector/industry/latest-quarter. Facts only, all `screening`-grade — no thresholds. Maximizes value
+  per call so the 25/day cap goes further.
+- Not in one free `OVERVIEW` call: forward P/S, balance-sheet debt/cash, next earnings date (need
+  extra AV endpoints — `BALANCE_SHEET`/`EARNINGS`, +1 call each — or a paid provider); these surface
+  as explicit gaps, never agent-filled numbers.
 - ETF handling (SPY/QQQ/VOO): needs AV `ETF_PROFILE` (separate function) or a paid provider — the
   stock `OVERVIEW` path does not cover ETFs. Deferred until ETF eligibility is built.
 

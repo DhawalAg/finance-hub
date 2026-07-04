@@ -34,23 +34,62 @@ from finance_hub.envelope import SCREENING, Envelope
 # Stocks: growth, profitability, valuation multiples, balance-sheet context,
 # and the next earnings date when available.
 REVENUE_GROWTH = "revenue_growth"
+EARNINGS_GROWTH = "earnings_growth"
 PROFITABILITY = "profitability"
+OPERATING_MARGIN = "operating_margin"
+RETURN_ON_EQUITY = "return_on_equity"
+RETURN_ON_ASSETS = "return_on_assets"
+GROSS_PROFIT = "gross_profit"
 PS = "ps"
 FORWARD_PS = "forward_ps"
+PE = "pe_ratio"
+FORWARD_PE = "forward_pe"
+PEG = "peg_ratio"
+PRICE_TO_BOOK = "price_to_book"
 EV_EBITDA = "ev_ebitda"
+EV_REVENUE = "ev_revenue"
+MARKET_CAP = "market_cap"
+REVENUE_TTM = "revenue_ttm"
+EBITDA = "ebitda"
+EPS = "eps"
+BOOK_VALUE = "book_value"
+SHARES_OUTSTANDING = "shares_outstanding"
+DIVIDEND_YIELD = "dividend_yield"
+DIVIDEND_PER_SHARE = "dividend_per_share"
+EX_DIVIDEND_DATE = "ex_dividend_date"
+BETA = "beta"
+WEEK52_HIGH = "week52_high"
+WEEK52_LOW = "week52_low"
+MA_50 = "ma_50"
+MA_200 = "ma_200"
+ANALYST_TARGET_PRICE = "analyst_target_price"
+ANALYST_RATING = "analyst_rating"
+SECTOR = "sector"
+INDUSTRY = "industry"
+LATEST_QUARTER = "latest_quarter"
 TOTAL_DEBT = "total_debt"
 TOTAL_CASH = "total_cash"
 NEXT_EARNINGS_DATE = "next_earnings_date"
 
 STOCK_FIELDS = (
-    REVENUE_GROWTH,
-    PROFITABILITY,
-    PS,
-    FORWARD_PS,
-    EV_EBITDA,
-    TOTAL_DEBT,
-    TOTAL_CASH,
-    NEXT_EARNINGS_DATE,
+    # growth
+    REVENUE_GROWTH, EARNINGS_GROWTH,
+    # profitability / returns
+    PROFITABILITY, OPERATING_MARGIN, RETURN_ON_EQUITY, RETURN_ON_ASSETS, GROSS_PROFIT,
+    # valuation multiples
+    PS, FORWARD_PS, PE, FORWARD_PE, PEG, PRICE_TO_BOOK, EV_EBITDA, EV_REVENUE,
+    # size / scale
+    MARKET_CAP, REVENUE_TTM, EBITDA, EPS, BOOK_VALUE, SHARES_OUTSTANDING,
+    # dividend
+    DIVIDEND_YIELD, DIVIDEND_PER_SHARE, EX_DIVIDEND_DATE,
+    # risk / technical anchors
+    BETA, WEEK52_HIGH, WEEK52_LOW, MA_50, MA_200,
+    # analyst
+    ANALYST_TARGET_PRICE, ANALYST_RATING,
+    # balance-sheet context (provider-dependent; absent from AV free OVERVIEW)
+    TOTAL_DEBT, TOTAL_CASH, NEXT_EARNINGS_DATE,
+    # classification / context
+    SECTOR, INDUSTRY, LATEST_QUARTER,
 )
 
 # ETFs: expense ratio, top holdings, sector exposure, AUM, 1y performance.
@@ -70,11 +109,13 @@ ETF_FIELDS = (
 
 # --- units ---------------------------------------------------------------
 
-RATIO = "ratio"  # dimensionless ratio, e.g. a margin or YoY growth
-MULTIPLE = "x"  # valuation multiple, e.g. P/S, EV/EBITDA
+RATIO = "ratio"  # dimensionless ratio, e.g. a margin, YoY growth, yield, beta
+MULTIPLE = "x"  # valuation multiple, e.g. P/S, P/E, PEG, EV/EBITDA
 USD = "USD"
+COUNT = "count"  # a bare count, e.g. shares outstanding
 DATE = "date"
-JSON = "json"  # structured text payload (holdings, sector weights)
+TEXT = "text"  # a categorical string, e.g. sector / industry
+JSON = "json"  # structured text payload (holdings, sector weights, rating spread)
 
 # --- availability vocabulary ---------------------------------------------
 
@@ -203,6 +244,25 @@ def _structured(field: str, raw: Any, *, source: str, as_of: str) -> Optional[Fu
     return Fundamental(field=field, envelope=env, unit=JSON)
 
 
+_TEXT_SENTINELS = frozenset({"", "-", "na", "n/a", "none", "null", "0000-00-00"})
+
+
+def _text(field: str, raw: Any, *, unit: str, source: str, as_of: str) -> Optional[Fundamental]:
+    """Normalize a categorical string or date field, skipping sentinels.
+
+    Used for non-numeric facts (sector, industry) and date fields (ex-dividend,
+    latest quarter) where ``_scalar``'s decimal coercion does not apply. A
+    provider sentinel (empty, ``-``, ``None``, ``0000-00-00``) surfaces as a gap.
+    """
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if text.lower() in _TEXT_SENTINELS:
+        return None
+    env = Envelope(value=text, source=source, grade=SCREENING, as_of=as_of)
+    return Fundamental(field=field, envelope=env, unit=unit)
+
+
 def normalize_eodhd(raw: dict, *, source: str = "eodhd") -> list[Fundamental]:
     """Normalize a recorded EODHD fundamentals response into envelopes."""
     as_of = _dig(raw, "General", "UpdatedAt") or date.today().isoformat()
@@ -268,16 +328,82 @@ def normalize_alpha_vantage(raw: dict, *, source: str = "alpha_vantage") -> list
         return [f for f in out if f is not None]
 
     as_of = raw.get("LatestQuarter") or date.today().isoformat()
+
+    def num(field: str, key: str, unit: str) -> Optional[Fundamental]:
+        return _scalar(field, raw.get(key), unit=unit, source=source, as_of=as_of)
+
+    def txt(field: str, key: str, unit: str) -> Optional[Fundamental]:
+        return _text(field, raw.get(key), unit=unit, source=source, as_of=as_of)
+
+    # One OVERVIEW call carries ~55 fields; harvest the screening-relevant set so
+    # each request maximizes stored evidence. Facts only — no thresholds/verdicts.
     out = [
-        _scalar(REVENUE_GROWTH, raw.get("QuarterlyRevenueGrowthYOY"), unit=RATIO,
-                source=source, as_of=as_of),
-        _scalar(PROFITABILITY, raw.get("ProfitMargin"), unit=RATIO, source=source, as_of=as_of),
-        _scalar(PS, raw.get("PriceToSalesRatioTTM"), unit=MULTIPLE, source=source, as_of=as_of),
-        _scalar(FORWARD_PS, raw.get("ForwardPriceToSalesTTM"), unit=MULTIPLE,
-                source=source, as_of=as_of),
-        _scalar(EV_EBITDA, raw.get("EVToEBITDA"), unit=MULTIPLE, source=source, as_of=as_of),
+        # growth
+        num(REVENUE_GROWTH, "QuarterlyRevenueGrowthYOY", RATIO),
+        num(EARNINGS_GROWTH, "QuarterlyEarningsGrowthYOY", RATIO),
+        # profitability / returns
+        num(PROFITABILITY, "ProfitMargin", RATIO),
+        num(OPERATING_MARGIN, "OperatingMarginTTM", RATIO),
+        num(RETURN_ON_EQUITY, "ReturnOnEquityTTM", RATIO),
+        num(RETURN_ON_ASSETS, "ReturnOnAssetsTTM", RATIO),
+        num(GROSS_PROFIT, "GrossProfitTTM", USD),
+        # valuation multiples (AV OVERVIEW omits ForwardPriceToSalesTTM → gap)
+        num(PS, "PriceToSalesRatioTTM", MULTIPLE),
+        num(FORWARD_PS, "ForwardPriceToSalesTTM", MULTIPLE),
+        num(PE, "PERatio", MULTIPLE),
+        num(FORWARD_PE, "ForwardPE", MULTIPLE),
+        num(PEG, "PEGRatio", MULTIPLE),
+        num(PRICE_TO_BOOK, "PriceToBookRatio", MULTIPLE),
+        num(EV_EBITDA, "EVToEBITDA", MULTIPLE),
+        num(EV_REVENUE, "EVToRevenue", MULTIPLE),
+        # size / scale
+        num(MARKET_CAP, "MarketCapitalization", USD),
+        num(REVENUE_TTM, "RevenueTTM", USD),
+        num(EBITDA, "EBITDA", USD),
+        num(EPS, "DilutedEPSTTM", USD),
+        num(BOOK_VALUE, "BookValue", USD),
+        num(SHARES_OUTSTANDING, "SharesOutstanding", COUNT),
+        # dividend
+        num(DIVIDEND_YIELD, "DividendYield", RATIO),
+        num(DIVIDEND_PER_SHARE, "DividendPerShare", USD),
+        txt(EX_DIVIDEND_DATE, "ExDividendDate", DATE),
+        # risk / technical anchors
+        num(BETA, "Beta", RATIO),
+        num(WEEK52_HIGH, "52WeekHigh", USD),
+        num(WEEK52_LOW, "52WeekLow", USD),
+        num(MA_50, "50DayMovingAverage", USD),
+        num(MA_200, "200DayMovingAverage", USD),
+        # analyst
+        num(ANALYST_TARGET_PRICE, "AnalystTargetPrice", USD),
+        _analyst_rating(raw, source=source, as_of=as_of),
+        # classification / context
+        txt(SECTOR, "Sector", TEXT),
+        txt(INDUSTRY, "Industry", TEXT),
+        txt(LATEST_QUARTER, "LatestQuarter", DATE),
     ]
     return [f for f in out if f is not None]
+
+
+def _analyst_rating(raw: dict, *, source: str, as_of: str) -> Optional[Fundamental]:
+    """Fold AV's five analyst-rating counts into one structured field.
+
+    Stored as a JSON spread of counts (strong_buy … strong_sell) — the raw
+    distribution, not a derived recommendation. Returns ``None`` if AV supplied
+    none of the counts.
+    """
+    keys = {
+        "strong_buy": "AnalystRatingStrongBuy",
+        "buy": "AnalystRatingBuy",
+        "hold": "AnalystRatingHold",
+        "sell": "AnalystRatingSell",
+        "strong_sell": "AnalystRatingStrongSell",
+    }
+    spread = {}
+    for out_key, raw_key in keys.items():
+        val = _to_decimal_str(raw.get(raw_key))
+        if val is not None:
+            spread[out_key] = int(Decimal(val))
+    return _structured(ANALYST_RATING, spread or None, source=source, as_of=as_of)
 
 
 def _earnings_date(field: str, raw: Any, *, source: str, as_of: str) -> Optional[Fundamental]:

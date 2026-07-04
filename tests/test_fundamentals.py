@@ -126,6 +126,29 @@ class TestAlphaVantageNormalization:
         assert F.FORWARD_PS not in got
         assert F.TOTAL_DEBT not in got
 
+    def test_full_overview_harvest(self):
+        """One OVERVIEW call harvests the full screening set, not just 4 fields."""
+        got = {f.field: f for f in F.normalize_alpha_vantage(load("alpha_vantage_ibm_full"))}
+        # Harvest breadth: valuation, returns, size, dividend, risk, analyst, context.
+        assert len(got) >= 30
+        # Spot-check one field per group, with correct value + unit.
+        assert got[F.PE].value == "25.64" and got[F.PE].unit == F.MULTIPLE
+        assert got[F.PEG].value == "2.704"
+        assert got[F.RETURN_ON_EQUITY].value == "0.358" and got[F.RETURN_ON_EQUITY].unit == F.RATIO
+        assert got[F.MARKET_CAP].value == "272115581000" and got[F.MARKET_CAP].unit == F.USD
+        assert got[F.SHARES_OUTSTANDING].unit == F.COUNT
+        assert got[F.DIVIDEND_YIELD].value == "0.0235"
+        assert got[F.BETA].value == "0.675"
+        assert got[F.SECTOR].value == "TECHNOLOGY" and got[F.SECTOR].unit == F.TEXT
+        assert got[F.EX_DIVIDEND_DATE].value == "2026-05-08" and got[F.EX_DIVIDEND_DATE].unit == F.DATE
+        # Analyst ratings fold into one structured JSON spread of raw counts.
+        assert got[F.ANALYST_RATING].unit == F.JSON
+        assert json.loads(got[F.ANALYST_RATING].value)["buy"] == 11
+        # Everything harvested is screening-grade, never decision.
+        assert all(f.grade == SCREENING for f in got.values())
+        # AV still omits forward P/S and balance-sheet debt/cash → honest gaps.
+        assert F.FORWARD_PS not in got and F.TOTAL_DEBT not in got
+
     def test_etf_profile_normalized(self):
         got = {f.field: f for f in F.normalize_alpha_vantage(load("alpha_vantage_spy"))}
         assert got[F.EXPENSE_RATIO].value == "0.0009"
