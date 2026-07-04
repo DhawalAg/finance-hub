@@ -57,10 +57,12 @@ finance.prices(tickers: list[str], *,
   adapter can normalize raw OHLCV plus adjusted close. Swap to Polygon / Massive or another paid price
   implementation later by registering a new implementation and selecting by config/param — **no
   planner change.**
-- Free **EODHD** implementation first for the compact v1 `FundamentalsProvider`. It supplies
-  screening-grade stock fundamentals and ETF fundamentals while the product loop is still being
-  ironed out. Use **Alpha Vantage** as the fallback when EODHD's 20-request/day free tier is
-  exhausted. Swap to FMP or a paid provider only when the free-tier pair becomes the bottleneck.
+- Free **Alpha Vantage** implementation first for the compact v1 `FundamentalsProvider`. Its free
+  tier (25 calls/day) supplies screening-grade stock fundamentals (revenue growth, margin, P/S,
+  EV/EBITDA — verified live). **EODHD** is a *paid* upgrade (its free tier excludes fundamentals — see
+  the 2026-07-04 correction in [provider-comparison](./provider-comparison.md)); when an
+  `EODHD_API_KEY` is configured it runs primary and spills to Alpha Vantage on quota exhaustion. Swap
+  to FMP or another paid provider only when the free runner becomes the bottleneck.
 - Provider adapters write normalized bars to `fin_price_bars`; consumers read price envelopes derived
   from those bars. The planner never receives a raw vendor payload or a bare scalar.
 - Callers accept cache within `max_age_minutes` (default `1440` = 1 day). Once the snapshot loop is
@@ -238,9 +240,10 @@ shaped only when their seam activates (§2 activation policy).
 
 `fin_price_bars` is built in the price slice; `fin_fetch_log` is built with the snapshot slice.
 `fin_metrics` is **owned by [analytics](./analytics.md)** and shown there. The compact
-`fin_fundamentals` screening cache is active for one-time-buy eligibility, with EODHD as the default
-free runner, Alpha Vantage as the fallback runner, and [provider-comparison](./provider-comparison.md)
-owning the replacement bakeoff if either becomes a bottleneck. Finance owns these via the
+`fin_fundamentals` screening cache is active for one-time-buy eligibility, with Alpha Vantage as the
+default free runner and EODHD as a paid upgrade (primary + spillover when configured), and
+[provider-comparison](./provider-comparison.md) owning the replacement bakeoff if the free runner
+becomes a bottleneck. Finance owns these via the
 finance-owned migration table
 (`fin_schema_migrations`, per ingestion M1 — **not** global
 `PRAGMA user_version`, since `hub.db` is shared), with FK + `CHECK` + indexes and
@@ -433,6 +436,7 @@ everything else flows from it.
 
 | Date | Topic | Decision | Consequence |
 |---|---|---|---|
+| 2026-07-04 | D3 correction — free fundamentals runner | EODHD's free tier does **not** include fundamentals (paid only, from $59.99/mo); the earlier "EODHD first" was based on a `demo`-token check that bypassed the gate. Alpha Vantage's free tier (25/day) is the free fundamentals runner, verified live (NVDA: revenue growth, margin, P/S, EV/EBITDA). EODHD stays wired as the paid upgrade (primary + spillover when `EODHD_API_KEY` set). | v1 fundamentals ship free without a subscription; supersedes the fundamentals half of the 2026-06-21 D3 entry. Details in [provider-comparison](./provider-comparison.md). |
 | 2026-06-04 | D2 — daily refresh and cache freshness | Refresh the active market-data universe at least daily once the snapshot loop exists; set `max_age_minutes = 1440` for consumer cache reads; defer market-calendar-specific freshness rules. | Keeps the system current enough for planning without adding calendar/scheduler complexity before Slice B/Automate. |
 | 2026-06-21 | D3 / D4 — provider escalation and snapshot universe | Keep yfinance as the v1 price provider; use EODHD as the first compact fundamentals provider, Alpha Vantage as the fallback runner, and SEC/edgartools as the decision-grade verification path; define the first snapshot universe as approved strategy sleeve instruments plus current holdings. | Closes the release-gate ambiguity: v1 can build the deployment evidence path without selecting a paid provider or refreshing the whole research watchlist. |
 | 2026-06-04 | A2 — provider seam shape | Split the seam into provider ingestion (`PriceProvider.fetch_daily_bars`) and consumer reads (`finance.prices(...) -> PriceEnvelope`). Keep `last` / intraday outside v1. | Lets acquisition capture richer daily bars while planner/research consume a small stable envelope; avoids scalar-price coupling and premature intraday complexity. |

@@ -44,9 +44,8 @@ def bootstrap() -> None:
     provider_name = os.environ.get("FINANCE_HUB_PRICE_PROVIDER")
 
     if provider_name == "none":
-        return
-
-    if provider_name is None or provider_name == "yfinance":
+        pass
+    elif provider_name is None or provider_name == "yfinance":
         def _build_yfinance() -> object:
             from finance_hub.market_data.yfinance_provider import YFinanceProvider
             return YFinanceProvider()
@@ -57,3 +56,45 @@ def bootstrap() -> None:
             f"Unknown FINANCE_HUB_PRICE_PROVIDER={provider_name!r}. "
             "Known values: 'yfinance', 'none'."
         )
+
+    _bootstrap_fundamentals(factories)
+
+
+def _bootstrap_fundamentals(factories) -> None:
+    """Wire the live fundamentals provider from API keys, if any are set.
+
+    ALPHA_VANTAGE_API_KEY is the free fundamentals runner (25 calls/day).
+    EODHD_API_KEY is the *paid* upgrade — EODHD's free tier excludes
+    fundamentals — so when it is present it runs primary (richer pack) and
+    spills to Alpha Vantage on quota exhaustion. Wiring:
+
+      Alpha Vantage only    → LiveAlphaVantageProvider  (the free default)
+      EODHD only            → LiveEODHDProvider          (paid)
+      EODHD + Alpha Vantage → SpilloverFundamentalsProvider(EODHD → Alpha Vantage)
+      neither               → leave unconfigured (reads surface 'not_configured')
+
+    Providers use stdlib HTTP and are cheap to construct, so an instance is
+    registered directly (no lazy factory needed, unlike the yfinance import).
+    """
+    eodhd_key = (os.environ.get("EODHD_API_KEY") or "").strip()
+    alpha_key = (os.environ.get("ALPHA_VANTAGE_API_KEY") or "").strip()
+    if not eodhd_key and not alpha_key:
+        return
+
+    from finance_hub.market_data.fundamentals import SpilloverFundamentalsProvider
+    from finance_hub.market_data.fundamentals_http import (
+        LiveAlphaVantageProvider,
+        LiveEODHDProvider,
+    )
+
+    if eodhd_key and alpha_key:
+        provider = SpilloverFundamentalsProvider(
+            primary=LiveEODHDProvider(api_key=eodhd_key),
+            fallback=LiveAlphaVantageProvider(api_key=alpha_key),
+        )
+    elif eodhd_key:
+        provider = LiveEODHDProvider(api_key=eodhd_key)
+    else:
+        provider = LiveAlphaVantageProvider(api_key=alpha_key)
+
+    factories.set_fundamentals_provider(provider)

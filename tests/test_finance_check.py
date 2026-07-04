@@ -157,21 +157,32 @@ class TestPriceProviderCheck:
 # ---------------------------------------------------------------------------
 
 class TestFundamentalsCheck:
-    def test_fundamentals_always_yellow(self):
+    def test_yellow_when_no_key_configured(self):
         results = run_checks({})
         r = _get(results, "fundamentals")
         assert r.severity == "yellow"
 
-    def test_fundamentals_message_names_dca_consequence(self):
+    def test_message_names_dca_consequence_when_unconfigured(self):
         results = run_checks({})
         r = _get(results, "fundamentals")
         assert "dca" in r.message.lower() or "one-time" in r.message.lower()
 
-    def test_fundamentals_message_names_consequence_not_blocking(self):
+    def test_fix_points_at_provider_keys_when_unconfigured(self):
         results = run_checks({})
         r = _get(results, "fundamentals")
-        # The message should say DCA works, not that everything is broken
-        assert "works" in r.message.lower() or "dca" in r.message.lower()
+        assert r.fix is not None
+        assert "EODHD_API_KEY" in r.fix or "ALPHA_VANTAGE_API_KEY" in r.fix
+
+    def test_green_when_eodhd_key_set(self):
+        results = run_checks({"EODHD_API_KEY": "k"})
+        r = _get(results, "fundamentals")
+        assert r.severity == "green"
+        assert "EODHD" in r.message
+
+    def test_green_when_alpha_vantage_key_set(self):
+        results = run_checks({"ALPHA_VANTAGE_API_KEY": "k"})
+        r = _get(results, "fundamentals")
+        assert r.severity == "green"
 
 
 # ---------------------------------------------------------------------------

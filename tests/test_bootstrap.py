@@ -109,6 +109,59 @@ class TestLoadDotenv:
         monkeypatch.delenv("_TEST_BOOTSTRAP_CUSTOM", raising=False)
 
 
+class TestFundamentalsAutoWiring:
+    """bootstrap() wires the fundamentals provider from EODHD/Alpha Vantage keys."""
+
+    _KEYS = ("EODHD_API_KEY", "ALPHA_VANTAGE_API_KEY", "FINANCE_HUB_PRICE_PROVIDER")
+
+    def setup_method(self):
+        factories.reset()
+        for k in self._KEYS:
+            os.environ.pop(k, None)
+
+    def teardown_method(self):
+        factories.reset()
+        for k in self._KEYS:
+            os.environ.pop(k, None)
+
+    def test_no_keys_leaves_fundamentals_unconfigured(self):
+        bootstrap_module.bootstrap()
+        with pytest.raises(LookupError):
+            factories.get_fundamentals_provider()
+
+    def test_eodhd_key_wires_live_eodhd(self):
+        from finance_hub.market_data.fundamentals_http import LiveEODHDProvider
+
+        os.environ["EODHD_API_KEY"] = "eodhd-key"
+        bootstrap_module.bootstrap()
+        provider = factories.get_fundamentals_provider()
+        assert isinstance(provider, LiveEODHDProvider)
+        assert provider.api_key == "eodhd-key"
+
+    def test_alpha_vantage_only_wires_live_alpha_vantage(self):
+        from finance_hub.market_data.fundamentals_http import LiveAlphaVantageProvider
+
+        os.environ["ALPHA_VANTAGE_API_KEY"] = "av-key"
+        bootstrap_module.bootstrap()
+        provider = factories.get_fundamentals_provider()
+        assert isinstance(provider, LiveAlphaVantageProvider)
+
+    def test_both_keys_wire_spillover_eodhd_then_alpha_vantage(self):
+        from finance_hub.market_data.fundamentals import SpilloverFundamentalsProvider
+        from finance_hub.market_data.fundamentals_http import (
+            LiveAlphaVantageProvider,
+            LiveEODHDProvider,
+        )
+
+        os.environ["EODHD_API_KEY"] = "eodhd-key"
+        os.environ["ALPHA_VANTAGE_API_KEY"] = "av-key"
+        bootstrap_module.bootstrap()
+        provider = factories.get_fundamentals_provider()
+        assert isinstance(provider, SpilloverFundamentalsProvider)
+        assert isinstance(provider.primary, LiveEODHDProvider)
+        assert isinstance(provider.fallback, LiveAlphaVantageProvider)
+
+
 @pytest.mark.live
 def test_live_yfinance_fetch_via_bootstrap():
     """Bootstrap wires yfinance; real SPY fetch returns bars."""
