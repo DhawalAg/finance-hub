@@ -212,7 +212,7 @@ def _check_fundamentals(results: list[CheckResult], env: Mapping[str, str]) -> N
             "Fundamentals provider not configured: "
             "DCA works; one-time buys need fundamentals evidence"
         ),
-        fix="export EODHD_API_KEY=...  # free tier; or ALPHA_VANTAGE_API_KEY=... as the fallback runner",
+        fix="export ALPHA_VANTAGE_API_KEY=...  # free fundamentals runner; EODHD_API_KEY=... is the paid upgrade",
     ))
 
 

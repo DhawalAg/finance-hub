@@ -1,7 +1,7 @@
 # Finance Market Data Provider Comparison — Working Note
 
-**Status:** D3 / D4 resolved for v1; first free fundamentals adapter selected
-**Updated:** 2026-06-21
+**Status:** D3 / D4 resolved for v1; free fundamentals runner corrected to Alpha Vantage
+**Updated:** 2026-07-04
 **Owner spec:** [acquisition](./acquisition.md)
 
 This note compares stock-market data providers for two different jobs:
@@ -16,14 +16,38 @@ the best fundamentals provider.
 
 ---
 
+## 2026-07-04 Correction — EODHD Free Tier Excludes Fundamentals
+
+The original decision (2026-06-21) named **EODHD** as the first *free* fundamentals runner. That was
+wrong: verified against [EODHD pricing](https://eodhd.com/pricing), the free tier (20 calls/day)
+covers EOD prices, splits/dividends, and search — **fundamentals are paid-only** (the "Fundamentals
+Data Feed" starts at $59.99/mo). The earlier check passed only because the public `demo` token
+returns fundamentals for a few tickers regardless of plan, which masked the gate.
+
+What actually holds on a free tier, verified empirically on 2026-07-04:
+
+- **Alpha Vantage free (25 calls/day, 5/min)** returns the compact stock screening pack. A live
+  `OVERVIEW` fetch for NVDA yielded revenue growth, profit margin, P/S, and EV/EBITDA — the four core
+  screening fields — all graded `screening`. This is now the **free fundamentals runner**.
+  - Caveat: free `OVERVIEW` is thinner than EODHD's paid pack — no forward P/S, no balance-sheet
+    debt/cash, no next-earnings-date in that call. Those need extra AV endpoints (more quota) or a
+    paid provider. Missing fields surface as explicit gaps, never zero.
+  - 25/day is enough for a personal portfolio because fundamentals change quarterly and are cached in
+    `fin_fundamentals` with a 120-day staleness window — we do not re-fetch on every plan.
+- **FMP free** is a 250-calls/day EOD *sandbox* with restricted fundamentals depth; its value is the
+  paid tiers, not a free win. Keep as a paid alternative.
+- **yfinance** can scrape fundamentals for free but is explicitly *not a fundamentals source of
+  truth* (unofficial, breaks silently) — do not use it for the evidence store.
+
 ## Current Working Decision
 
 For build-now:
 
 - Keep **yfinance** as the first free `PriceProvider.fetch_daily_bars(...)` implementation.
-- Use **EODHD** as the first free `FundamentalsProvider` implementation for the compact v1 stock +
-  ETF evidence pack.
-- Use **Alpha Vantage** as the fallback runner once EODHD's 20-request/day free tier is exhausted.
+- Use **Alpha Vantage** as the free `FundamentalsProvider` runner for the compact v1 stock evidence
+  pack (core screening fields). This is the default when only `ALPHA_VANTAGE_API_KEY` is set.
+- Use **EODHD** as the *paid* upgrade for a richer stock + ETF pack; when an `EODHD_API_KEY` is
+  configured it runs primary and spills to Alpha Vantage on quota exhaustion. It is not a free option.
 - Use **SEC / edgartools** as the filing-grounded verification path for thesis-critical stock
   fundamentals.
 - Refresh the active universe **at least daily** once the snapshot loop exists.
@@ -34,10 +58,10 @@ For build-now:
 For provider escalation:
 
 - Do **not** treat FMP, EODHD, Polygon / Massive, or any other provider as the automatic paid default.
-- Start with EODHD so the product can be used and sharpened on the free tier before paying for a
-  broader feed.
-- Run a small provider bakeoff before replacing EODHD with Alpha Vantage as the fallback or with a
-  paid fundamentals integration.
+- Start with Alpha Vantage so the product can be used and sharpened on the free tier before paying for
+  a broader feed.
+- Run a small provider bakeoff before replacing Alpha Vantage with EODHD (paid) or another paid
+  fundamentals integration.
 - Evaluate price-data providers and fundamentals providers separately.
 - Use SEC / edgartools or another filing-grounded source for decision-grade fundamentals; treat
   aggregator fundamentals as screening unless validated against filings.
@@ -106,8 +130,8 @@ Use these separately:
 |---|---|---|---|---|
 | **yfinance** | Free v1 daily bars | Easy Python integration; supports multi-ticker downloads, daily intervals, raw/unadjusted mode, actions option | Unofficial Yahoo access; reliability can break; not a fundamentals source of truth | Use first for Slice A/B; monitor failures |
 | **Polygon / Massive** | Paid price-data upgrade | Strong OHLC aggregate API; clear stocks tiers; supports adjusted/unadjusted aggregates; good if we need more reliable historical bars | More price-feed oriented than fundamentals-oriented; cost rises with history/real-time needs | Strong price-data fallback if yfinance fails |
-| **EODHD** | First free compact fundamentals provider | Free tier exists; stock fundamentals and ETF fundamentals line up with the v1 compact evidence pack; 20 requests/day is enough to start | Free tier is small; missing fields and stale values must be expected; fundamentals quality still needs validation; screening-grade only | Default runner until the daily cap is consumed |
-| **Alpha Vantage** | Fallback compact fundamentals provider | Free tier exists; company overview, normalized financial statements, earnings, estimates, listing status, and ETF profile / holdings / allocation endpoints map to the v1 compact evidence pack | Free tier is small; missing fields and stale values must be expected; fundamentals quality still needs validation; screening-grade only | Fallback once EODHD limits are hit |
+| **EODHD** | Paid compact fundamentals upgrade | Stock + ETF fundamentals line up with the v1 compact evidence pack; richer than AV free (forward P/S, balance-sheet debt/cash, next-earnings-date) | **Fundamentals are NOT in the free tier** (free = prices/splits/dividends/search only); paid Fundamentals Data Feed from $59.99/mo; screening-grade only | Paid upgrade; runs primary + spills to AV when an `EODHD_API_KEY` is configured |
+| **Alpha Vantage** | Free compact fundamentals runner | Free tier (25 calls/day, 5/min) returns the core stock screening pack — verified live: revenue growth, margin, P/S, EV/EBITDA; also income statement, balance sheet, cash flow, ETF profile as separate calls | Free `OVERVIEW` is thinner than EODHD paid (no forward P/S / debt-cash / earnings-date in one call); 25/day cap; screening-grade only | **Default free runner** (default when only `ALPHA_VANTAGE_API_KEY` is set) |
 | **FMP** | Paid fundamentals / events upgrade | Broad stock metrics, ratios, enterprise values, growth, estimates, calendars, SEC filing links, bulk endpoints, ETF and mutual-fund endpoints | ETF holdings may require a higher tier; fundamentals should not be decision-grade without validation; pricing/tier churn risk | First serious paid alternative if Alpha Vantage blocks normal use |
 | **Tiingo** | Price data and possible fundamentals alternative | Market reputation for EOD price data; Reddit users mention moving from FMP to Tiingo for fundamentals | Official docs/pricing need direct verification before selection; fundamentals offering may require sales/beta access depending plan | Investigate before paid choice |
 | **Intrinio** | Higher-quality paid fundamentals / enterprise data | Official docs advertise fundamentals, market data, options, sourcing/cleaning; pricing page shows EOD adjusted/unadjusted OHLCV and business-use licensing | Much more expensive than hobby APIs; likely overkill until workflow proves value | Serious later candidate, not v1 |
@@ -125,9 +149,9 @@ Use these separately:
 
 Do not pick the paid provider from marketing pages. Test with a small, ugly benchmark set.
 
-The first v1 adapter can start with Alpha Vantage so the product can be used before committing to a
-paid feed. The bakeoff becomes an upgrade gate: run it before replacing EODHD/Alpha Vantage with FMP
-or another paid fundamentals provider.
+The first v1 adapter starts with Alpha Vantage (the free runner) so the product can be used before
+committing to a paid feed. The bakeoff becomes an upgrade gate: run it before adding a paid
+fundamentals provider (EODHD paid, FMP, or another).
 
 ### Price-Data Bakeoff
 
@@ -193,27 +217,26 @@ Checks:
 - Ticker/entity resolution.
 - Agreement against latest 10-K / 10-Q for thesis-critical fields.
 
-V1 EODHD smoke test:
+V1 Alpha Vantage smoke test (done 2026-07-04, passing):
 
-- Providers: EODHD plus SEC/edgartools for filing-grounded spot checks, with Alpha Vantage used as
-  a comparison baseline when EODHD hits its free cap.
-- Tickers: AAPL, MSFT, NVDA, JPM or BAC, AMZN or GOOGL, and SPY or QQQ for ETF handling.
-- Fields: revenue growth, margin/profitability, P/S or forward P/S, EV/EBITDA when available,
-  debt/cash, next earnings date, source/as_of, and filing/source link when available.
-- Outcome: confirm EODHD can power the first compact screening pack, with unavailable fields
-  represented as explicit gaps rather than agent-filled numbers, and confirm Alpha Vantage can take
-  over once EODHD's daily cap is exhausted.
+- Providers: Alpha Vantage (free `OVERVIEW`) plus SEC/edgartools for filing-grounded spot checks.
+- Tickers: verified live against NVDA; extend to AAPL, MSFT, JPM or BAC, AMZN or GOOGL for coverage.
+- Fields confirmed on the free tier: revenue growth, margin/profitability, P/S, EV/EBITDA — with
+  source/as_of. Not in one free `OVERVIEW` call: forward P/S, debt/cash, next earnings date (need
+  extra AV endpoints or a paid provider); these surface as explicit gaps, never agent-filled numbers.
+- ETF handling (SPY/QQQ/VOO): needs AV `ETF_PROFILE` (separate function) or a paid provider — the
+  stock `OVERVIEW` path does not cover ETFs. Deferred until ETF eligibility is built.
 
 Paid fundamentals upgrade triggers:
 
-- EODHD's free rate limit blocks normal usage.
-- `ETF_PROFILE` lacks fields needed for ETF eligibility.
-- Stock fundamentals miss too many valuation fields.
+- Alpha Vantage's 25/day free cap blocks normal usage.
+- ETF fundamentals are needed and `ETF_PROFILE` is insufficient.
+- Stock fundamentals miss too many valuation fields (e.g. forward P/S, debt/cash needed routinely).
 - Manual fundamentals gaps become common enough to slow product iteration.
 
-When any trigger fires, compare FMP and EODHD first. FMP is the broader paid bundle candidate; EODHD
-is the cleaner stock + ETF fundamentals candidate. Keep SEC/edgartools as the decision-grade check
-path either way.
+When any trigger fires, compare EODHD (paid) and FMP first. EODHD is the cleaner stock + ETF
+fundamentals candidate and is already wired (drop in an `EODHD_API_KEY`); FMP is the broader paid
+bundle. Keep SEC/edgartools as the decision-grade check path either way.
 
 ---
 

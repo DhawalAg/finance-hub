@@ -63,12 +63,14 @@ def bootstrap() -> None:
 def _bootstrap_fundamentals(factories) -> None:
     """Wire the live fundamentals provider from API keys, if any are set.
 
-    EODHD_API_KEY is the default free runner; ALPHA_VANTAGE_API_KEY is the
-    spillover runner once EODHD's daily free tier is spent. Wiring:
+    ALPHA_VANTAGE_API_KEY is the free fundamentals runner (25 calls/day).
+    EODHD_API_KEY is the *paid* upgrade — EODHD's free tier excludes
+    fundamentals — so when it is present it runs primary (richer pack) and
+    spills to Alpha Vantage on quota exhaustion. Wiring:
 
-      EODHD only            → LiveEODHDProvider
+      Alpha Vantage only    → LiveAlphaVantageProvider  (the free default)
+      EODHD only            → LiveEODHDProvider          (paid)
       EODHD + Alpha Vantage → SpilloverFundamentalsProvider(EODHD → Alpha Vantage)
-      Alpha Vantage only    → LiveAlphaVantageProvider
       neither               → leave unconfigured (reads surface 'not_configured')
 
     Providers use stdlib HTTP and are cheap to construct, so an instance is

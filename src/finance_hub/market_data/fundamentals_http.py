@@ -100,7 +100,11 @@ def _eodhd_symbol(ticker: str) -> str:
 
 @dataclass
 class LiveEODHDProvider:
-    """EODHD fundamentals over HTTP — the default free live runner.
+    """EODHD fundamentals over HTTP — the *paid* upgrade runner.
+
+    EODHD's free tier excludes fundamentals (paid Fundamentals Data Feed), so
+    this runs only when a paid ``EODHD_API_KEY`` is configured, where it serves
+    a richer pack than Alpha Vantage free and spills to Alpha Vantage on quota.
 
     ``fetch_fundamentals(ticker)`` GETs the EODHD fundamentals endpoint and
     returns normalized :class:`Fundamental` envelopes. On a quota/entitlement
@@ -136,7 +140,11 @@ class LiveEODHDProvider:
 
 @dataclass
 class LiveAlphaVantageProvider:
-    """Alpha Vantage ``OVERVIEW`` / ``ETF_PROFILE`` over HTTP — the fallback runner.
+    """Alpha Vantage ``OVERVIEW`` over HTTP — the free fundamentals runner (default).
+
+    Alpha Vantage's free tier (25 calls/day) is the default free source of the
+    compact stock screening pack (revenue growth, margin, P/S, EV/EBITDA). It is
+    also the spillover target when a paid EODHD key is configured.
 
     Alpha Vantage answers 200 with a ``Note``/``Information`` advisory (or an
     empty body) when the free daily budget is spent; that is mapped to

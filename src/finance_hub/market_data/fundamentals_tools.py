@@ -34,8 +34,9 @@ from finance_hub.store import connection
 def fetch_fundamentals(*, ticker: str, fields: Optional[list[str]] = None) -> dict:
     """Fetch → store → read back one ticker's fundamentals.
 
-    Calls the configured ``FundamentalsProvider`` (EODHD, spilling to Alpha
-    Vantage), upserts the normalized envelopes into ``fin_fundamentals``, and
+    Calls the configured ``FundamentalsProvider`` (Alpha Vantage free by
+    default, or paid EODHD spilling to Alpha Vantage), upserts the normalized
+    envelopes into ``fin_fundamentals``, and
     renders the stored fields through :func:`screen_fundamentals` so the caller
     sees an explicit availability per field rather than a raw payload. ``fields``
     restricts the read-back; omitted, it reports every field the fetch returned.
