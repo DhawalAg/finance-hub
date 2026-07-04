@@ -17,6 +17,7 @@ _TOOL_MODULES = [
     "finance_hub.runtime.tools",
     "finance_hub.ingestion.tools",
     "finance_hub.market_data.tools",
+    "finance_hub.market_data.fundamentals_tools",
     "finance_hub.research.tools",
     "finance_hub.strategy.tools",
 ]

@@ -37,7 +37,7 @@ def run_checks(env: Mapping[str, str], *, live: bool = False) -> list[CheckResul
     _check_price_provider(results, env)
     if live:
         _check_price_live(results)
-    _check_fundamentals(results)
+    _check_fundamentals(results, env)
     _check_anthropic_key(results, env)
     _check_env_vars(results, env)
     return results
@@ -192,15 +192,27 @@ def _check_price_live(results: list[CheckResult]) -> None:
         ))
 
 
-def _check_fundamentals(results: list[CheckResult]) -> None:
+def _check_fundamentals(results: list[CheckResult], env: Mapping[str, str]) -> None:
+    eodhd = bool((env.get("EODHD_API_KEY") or "").strip())
+    alpha = bool((env.get("ALPHA_VANTAGE_API_KEY") or "").strip())
+    if eodhd or alpha:
+        wired = " → ".join(
+            name for name, on in (("EODHD", eodhd), ("Alpha Vantage", alpha)) if on
+        )
+        results.append(CheckResult(
+            name="fundamentals",
+            severity="green",
+            message=f"Fundamentals provider configured ({wired})",
+        ))
+        return
     results.append(CheckResult(
         name="fundamentals",
         severity="yellow",
         message=(
             "Fundamentals provider not configured: "
-            "DCA works; one-time buys blocked until the fundamentals client lands"
+            "DCA works; one-time buys need fundamentals evidence"
         ),
-        fix="# No action needed for DCA; fundamentals HTTP client is the next planned feature",
+        fix="export EODHD_API_KEY=...  # free tier; or ALPHA_VANTAGE_API_KEY=... as the fallback runner",
     ))
 
 
