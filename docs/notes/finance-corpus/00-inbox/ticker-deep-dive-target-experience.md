@@ -8,9 +8,9 @@ as a concrete deliverable plus a catalogue of research lenses. It is deliberatel
 **ghost requirements**: the lenses describe the experience we want, and each lens then *pulls* a
 capability, tool, or provider seam into the existing finance specs. Read it as "here is the artifact
 we want; here is what hub-hub must grow to support it" — it feeds
-[research/spec.md](../../../requests/finance/research/spec.md),
-[market-data/spec.md](../../../requests/finance/market-data/spec.md), and
-[strategy/spec.md](../../../requests/finance/strategy/spec.md); it does not replace them.
+[research/spec.md](../../../requests/research/spec.md),
+[market-data/spec.md](../../../requests/market-data/spec.md), and
+[strategy/spec.md](../../../requests/strategy/spec.md); it does not replace them.
 
 > Sibling to [requirements-dump.md](./requirements-dump.md): that note specced the *planner*; this one
 > specs the *instrument deep-dive*, which the research spec already reserves as `instrument_brief(ticker)`

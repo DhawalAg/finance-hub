@@ -8,7 +8,7 @@ deployment recommendation workflow: CSV-supplied portfolio state, explicit deplo
 candidates, and market-data evidence feed a reviewable buy-only plan.
 
 The executable code now lives in the installable `src/finance_hub/` package. Specs, plans, TODOs,
-and design docs stay request-scoped under `docs/requests/finance/`.
+and design docs stay request-scoped under `docs/requests/`.
 
 ## Product Flow
 
@@ -92,7 +92,7 @@ Keep each layer independently evolvable without building a generalized platform 
 The files under [`docs/notes/finance-corpus/00-inbox`](../../notes/finance-corpus/00-inbox/) remain
 working notes, decision history, and source material. They are not the final implementation
 contracts. As each spec is sharpened, durable decisions move into the corresponding document under
-`docs/requests/finance/`.
+`docs/requests/`.
 
 Generated HTML explainers and completed one-off conversion TODOs are intentionally not kept in the
 active spec tree. Regenerate readouts from durable markdown when needed.

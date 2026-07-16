@@ -128,7 +128,7 @@ review and one-time-buy eligibility.
 ## Source Of Truth
 
 Finance behavior belongs under `src/finance_hub/`. Durable specs live under
-`docs/requests/finance/`, with `docs/requests/finance/README.md` as the canonical spec map. ADRs live
+`docs/requests/`, with `docs/requests/README.md` as the canonical spec map. ADRs live
 under `docs/adr/`.
 
 Source notes under `docs/notes/finance-corpus/00-inbox/` are retained for provenance and decision
