@@ -30,6 +30,7 @@ The four specs separate user commitments and engineering ownership:
 | [Finance strategy](./strategy/spec.md) | Portfolio/deployable-cash inputs, explicit promotion, versioned strategy, deterministic deployment recommendation | Reviewable deployment recommendation across DCA and one-time buys | Sharpened v1 contract |
 | [Finance market data](./market-data/spec.md) | Shared market-data subsystem, split into [acquisition](./market-data/acquisition.md) (daily-bar provider seam, persistence, price-envelope reads, provider ownership) + [analytics](./market-data/analytics.md) (metrics, aggregates, analysis surfaces) | Grounded price history, price envelopes, metrics, compact fundamentals, and quantitative research inputs | Support contract for v1; next cleanup focus for evidence readiness |
 | [Bootstrapping & local setup](./bootstrapping/spec.md) | Install-to-usable seam: `.env` loading, provider auto-wiring, registered Fidelity CSV import, `finance check` diagnostic, MCP setup; fixes the Slice 7 CSV classification bug | A DCA-complete end-to-end flow runnable from CLI and MCP against a real Fidelity export | Sharpened via grilling; ready for PRD synthesis |
+| [Agent evals](./evals/spec.md) | Evaluating the agent stack (model + prompt + skills + tools) against durable outcomes: task model, fixture/freezing policy, grader tiers, regression vs capability suites, harness contract | A versioned eval system verifying the grounding invariant and the DCA/one-time-buy workflows end-to-end | Draft; needs `/grill-with-docs` |
 
 ## Agent-Ready Read Order
 
