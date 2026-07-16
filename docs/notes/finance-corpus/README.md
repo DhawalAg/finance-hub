@@ -6,6 +6,6 @@ These files are not implementation contracts. Durable decisions should be promot
 
 - `CONTEXT.md` for vocabulary and current repo shape;
 - `docs/adr/` for architecture decisions;
-- `docs/requests/finance/` for implementation specs and request plans.
+- `docs/requests/` for implementation specs and request plans.
 
 The current `00-inbox/` files are retained because they explain where the durable specs came from.

@@ -217,7 +217,7 @@ structured results at each step.
 
 ```text
 src/finance_hub/        installable Python package
-docs/requests/finance/  durable finance specs and request-scoped plans
+docs/requests/          durable finance specs and request-scoped plans
 docs/notes/finance-corpus/   supporting finance source notes and raw intake
 CONTEXT.md              domain glossary and current build map
 docs/adr/               architecture decisions
@@ -235,4 +235,4 @@ finance-mcp                                # start the MCP server (stdio)
 ## Design Rule
 
 The runtime stays small and generic. Finance behavior lives under `src/finance_hub/`,
-and specs/plans/todos stay in the relevant request folder under `docs/requests/finance/`.
+and specs/plans/todos stay in the relevant request folder under `docs/requests/`.
