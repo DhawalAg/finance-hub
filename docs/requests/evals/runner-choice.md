@@ -1,6 +1,10 @@
 # Eval Runner Choice: Claude Code CLI Headless vs Claude Agent SDK
 
-**Status:** Research findings — resolves eval spec open question §13.1 (issue #25, map #24)
+**Status:** Ratified by the user 2026-07-16 — resolves eval spec open question §13.1 (issue #25, map #24).
+Ratification added a funding criterion, re-researched in the same-day follow-up (see
+[Funding](#funding-claude-max-subscription) below and the
+[re-research comment](https://github.com/DhawalAg/finance-hub/issues/25#issuecomment-4993572830)
+on #25 for full citations).
 **Date:** 2026-07-16
 **Question:** Which runner should the eval harness use to drive the SUT — Claude Code CLI
 headless mode (`claude -p` with an MCP config) or the Claude Agent SDK?
@@ -162,6 +166,40 @@ plumbing.
 | Model pinning | ✅ `--model` full id | ✅ `model` full id, plus pip-pinned runner | SDK (narrowly) |
 | Maintenance cost | parse an evolving binary's output | semver'd library, changelog, typed API | SDK |
 | pass^3 cost/latency | `--max-turns`/`--max-budget-usd`, `total_cost_usd` | same, plus typed result subtypes | tie |
+
+## Funding: Claude Max subscription
+
+Decisive constraint added at ratification: eval runs must be funded by the user's Claude Max
+subscription — no API credits. The SDK clears it (re-researched 2026-07-16, primary sources
+cited in the [#25 comment](https://github.com/DhawalAg/finance-hub/issues/25#issuecomment-4993572830)):
+
+- **Auth**: the SDK inherits the CLI's credential chain, which falls through to "Subscription
+  OAuth credentials from `/login` — the default for Pro, Max, Team, and Enterprise users"
+  ([authentication docs](https://code.claude.com/docs/en/authentication)). No `ANTHROPIC_API_KEY`
+  required.
+- **Policy**: ["Use the Claude Agent SDK with your Claude plan"](https://support.claude.com/en/articles/15036540)
+  states the Agent SDK, `claude -p`, and third-party apps "draw from your subscription's usage
+  limits." A June 2026 "Agent SDK credit" restructuring was **paused before taking effect** —
+  re-verify this article before Phase 2 starts.
+- **Capacity**: a full pass^3 regression run (~36 short sessions + judge calls) ≈ one moderate
+  interactive coding session against the 5-hour window; daily full runs are realistic on Max 5x
+  (limits doubled May 2026).
+
+Constraints the harness must encode:
+
+1. **Strip `ANTHROPIC_API_KEY` from trial env** — it silently outranks subscription auth in
+   non-interactive mode.
+2. **Judge calls go through the same runner** (SDK `query()`), never the raw Messages API,
+   or they'd need API credits. `total_cost_usd` becomes a metric, not a bill.
+3. **Unattended runs use `claude setup-token`** (`CLAUDE_CODE_OAUTH_TOKEN`, 1-year,
+   inference-only, Pro/Max-required); `/login` credentials expire.
+4. **Watch `--bare`**: it skips OAuth/keychain and ignores `CLAUDE_CODE_OAUTH_TOKEN`, and docs
+   say it will become the headless default in a future release — pin the runner version and
+   re-test on upgrades.
+
+If Anthropic ever restricts subscription use here, the policy article governs `claude -p` and
+the SDK *as one category* — the fallback in that world is API credits, not a runner switch, so
+this does not weaken the SDK recommendation.
 
 ## Implementation notes for the harness (Phase 1)
 
