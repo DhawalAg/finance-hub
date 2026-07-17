@@ -77,47 +77,14 @@ Three evaluation layers, only two of which are this spec's scope:
 
 ## 3. Vocabulary
 
-These terms extend the CONTEXT.md Language section and should migrate there once the spec is
-accepted.
+The canonical definitions for this spec's terms live in the root [CONTEXT.md](../../../CONTEXT.md)
+Language section, under **Evals** (migrated per #36): task, trial, transcript, outcome, grader,
+suite, gate/track/flag, pass@k/pass^k, runtime surface, dev scaffolding, materialization list,
+adoption boundary. This section intentionally holds no definitions — consult CONTEXT.md and update
+terms there, not here.
 
-**Task**: One test case — a fixture, a prompt, a reference solution, and a set of graders. Written
-so two competent reviewers would agree on what success means.
-
-**Trial**: One agent attempt at a task. Tasks run as multiple trials because the SUT is
-non-deterministic.
-
-**Transcript**: The complete record of a trial — every tool call, its arguments, its result, and
-all agent text. Persisted durably so graders can be re-run without re-running trials.
-
-**Outcome**: The durable state after a trial — rows in the SQLite store and artifacts in the
-workspace. *Never* the agent's claim that something happened. A plan is approved when
-`fin_deployment_plans.status` says so, not when the transcript says "I approved the plan."
-
-**Grader**: A function scoring one aspect of a trial. Tasks compose multiple graders; each grader
-produces one verdict plus detail.
-
-**Suite**: A named collection of tasks. Two kinds — **regression** (should pass ~100%; a drop is a
-defect) and **capability** (expected to start low; measures the frontier).
-
-**Gate / Track / Flag**: The three verdict roles. *Gate* fails the trial (outcome wrong). *Track*
-records a metric for cross-version comparison without failing (turns, tokens, trajectory quality).
-*Flag* routes the transcript to human review instead of failing (subjective quality below
-threshold, suspicious trace patterns).
-
-**pass@k / pass^k**: pass@k = at least one of k trials succeeded (fine for research exploration).
-pass^k = all k trials succeeded (the bar for money-adjacent flows, where consistency is the
-product).
-
-**Runtime surface / dev scaffolding**: The repo's two prompt surfaces (§2). The runtime surface
-(runtime CLAUDE.md, skills, MCP config) is part of the SUT and is all a trial ever loads; dev
-scaffolding (root CLAUDE.md, `docs/agents/**`, process docs) never enters a trial.
-
-**Materialization list**: The checked-in manifest under `evals/` naming every runtime-surface
-file the harness copies into a trial dir; also the exact input to the §8.3 prompt hash.
-
-**Adoption boundary**: The moment before a change to a versioned SUT component (model pin, skill
-set, prompt surface) is adopted. The regression suite runs at adoption boundaries, not on every
-edit (§8.1).
+**SUT** stays spec-local shorthand for the §2 system under test; it is deliberately not a
+CONTEXT.md term.
 
 ## 4. The Outcome Is The Database
 
