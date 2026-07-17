@@ -1,9 +1,69 @@
 # Eval Fixtures
 
-Fixture scripts are Phase 1 deliverables. Each script builds one named fixture by running
-real migrations and real tools against a temporary SQLite DB. Never hand-crafted SQL.
+Fixture scripts build one named fixture each by running real migrations and real tools
+against a temporary SQLite DB. Never hand-crafted SQL (spec §5.2).
 
-## Fixture Specs (Phase 0 authoring — scripts not yet written)
+## Phase 4 Capability Fixtures (issue #49)
+
+### `fetch_fundamentals_fixture` (used by C1)
+
+**What it contains**: AAPL registered as a candidate instrument; fin_fundamentals is empty.
+A recorded EODHD response for AAPL is placed at `fixture/eodhd_responses.json`.
+`FINANCE_HUB_FUNDAMENTALS_FIXTURE` env var wires the EODHDAdapter so `finance.fetch_fundamentals`
+works without a live API key during the trial.
+
+**Script**: `evals/fixtures/build_fetch_fundamentals_fixture.py`
+
+---
+
+### `fundamentals_eligibility` (used by C2)
+
+**What it contains**: AAPL fully ready for one-time eligibility evaluation.
+- Approved single_stock candidate in theme_c2 (conviction=4 + note).
+- Thesis note in workspace/research/instruments/AAPL.md.
+- Two source links (DCA eligibility citations met).
+- 8 AAPL fundamentals rows pre-seeded from EODHD fixture (one-time eligibility met).
+- Active strategy strat_c2_v1 (single_stock sleeve 100%).
+- Portfolio snapshot snap_c2_fixture with AAPL position.
+- One price bar for AAPL (2026-06-22, $185.00).
+
+**Script**: `evals/fixtures/build_fundamentals_eligibility.py`
+
+---
+
+### `one_time_ready_deployment` (used by C3)
+
+**What it contains**: VTI + AAPL both DCA- and one-time-eligible, ready for a mixed plan.
+- VTI (broad_market_etf) + AAPL (single_stock) approved in theme_c3.
+- AAPL: thesis note + 2 source links (DCA eligibility).
+- 8 AAPL fundamentals + 5 VTI fundamentals pre-seeded (one-time eligibility).
+- Active strategy strat_c3_v1: VTI (broad_market 70%) + AAPL (single_stock 30%).
+- Portfolio snapshot snap_c3_fixture with VTI + AAPL positions.
+- Price bars for VTI ($242.00) + AAPL ($185.00) on 2026-06-22.
+
+**Script**: `evals/fixtures/build_one_time_ready_deployment.py`
+
+---
+
+### `dca_ready_no_fundamentals` (used by C7)
+
+**What it contains**: VTI + AAPL DCA-eligible but NO fundamentals rows.
+Identical to `one_time_ready_deployment` except fin_fundamentals is empty (0 rows).
+This is the negative test fixture: a one-time buy request must be refused with
+MISSING_FUNDAMENTALS rather than satisfied by invented valuation data.
+
+- VTI + AAPL approved in theme_c7 with conviction notes.
+- AAPL: thesis note + 2 source links (DCA eligibility maintained).
+- fin_fundamentals: 0 rows (key invariant — no provider data available).
+- Active strategy strat_c7_v1: VTI (broad_market 70%) + AAPL (single_stock 30%).
+- Portfolio snapshot snap_c7_fixture with VTI + AAPL positions.
+- Price bars for VTI + AAPL (DCA plan generation possible; one-time blocked).
+
+**Script**: `evals/fixtures/build_dca_ready_no_fundamentals.py`
+
+---
+
+## Phase 0 Fixture Specs (scripts not yet written)
 
 ### `fidelity_sample_csv` (used by R1)
 
