@@ -459,8 +459,9 @@ def _run_trajectory_grader(spec: dict, transcript: Transcript) -> GraderResult:
     gid = spec["id"]
     role = spec.get("role", "track")
     detail = spec.get("detail", "")
-    # Suffix is everything after the first dot (e.g. "no_invented_prices")
-    suffix = gid.split(".", 1)[-1] if "." in gid else gid
+    # Suffix is everything after the first dot (e.g. "no_invented_prices").
+    # grade() only dispatches here for ids starting "trajectory.", so a dot is present.
+    suffix = gid.split(".", 1)[-1]
     handler = _TRAJECTORY_HANDLERS.get(suffix)
     if handler is None:
         return GraderResult(
