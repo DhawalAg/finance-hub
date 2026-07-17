@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 import pytest
 
-from evals.harness.runner import Transcript, TranscriptEvent, TrialEnv
+from evals.harness.runner import Runner, Transcript, TranscriptEvent, TrialEnv
 
 # ---------------------------------------------------------------------------
 # Helpers shared across test classes
@@ -473,7 +473,7 @@ class TestHarnessRun:
 
         results_root = tmp_path / "results"
         runner = self._make_mock_runner()
-        run_dir = run(TASK_R1, runner, results_root=results_root)
+        run_dir = run(TASK_R1, runner, k=1, results_root=results_root)
         assert run_dir.is_dir()
 
     def test_run_writes_meta_json(self, tmp_path):
@@ -481,7 +481,7 @@ class TestHarnessRun:
 
         results_root = tmp_path / "results"
         runner = self._make_mock_runner()
-        run_dir = run(TASK_R1, runner, results_root=results_root)
+        run_dir = run(TASK_R1, runner, k=1, results_root=results_root)
         meta_path = run_dir / "meta.json"
         assert meta_path.exists()
 
@@ -497,8 +497,8 @@ class TestHarnessRun:
 
         results_root = tmp_path / "results"
         runner = self._make_mock_runner()
-        run_dir = run(TASK_R1, runner, results_root=results_root)
-        transcript_path = run_dir / "transcript.jsonl"
+        run_dir = run(TASK_R1, runner, k=1, results_root=results_root)
+        transcript_path = run_dir / "trial_0" / "transcript.jsonl"
         assert transcript_path.exists()
 
         lines = [l for l in transcript_path.read_text().splitlines() if l.strip()]
@@ -509,8 +509,8 @@ class TestHarnessRun:
 
         results_root = tmp_path / "results"
         runner = self._make_mock_runner()
-        run_dir = run(TASK_R1, runner, results_root=results_root)
-        verdicts_path = run_dir / "verdicts.jsonl"
+        run_dir = run(TASK_R1, runner, k=1, results_root=results_root)
+        verdicts_path = run_dir / "trial_0" / "verdicts.jsonl"
         assert verdicts_path.exists()
 
         lines = [l for l in verdicts_path.read_text().splitlines() if l.strip()]
@@ -520,6 +520,17 @@ class TestHarnessRun:
             assert "grader_id" in v
             assert "verdict" in v
             assert "role" in v
+
+    def test_run_verdicts_have_graded_at(self, tmp_path):
+        from evals.harness.harness import run
+
+        results_root = tmp_path / "results"
+        run_dir = run(TASK_R1, self._make_mock_runner(), k=1, results_root=results_root)
+        verdicts_path = run_dir / "trial_0" / "verdicts.jsonl"
+        for line in verdicts_path.read_text().splitlines():
+            if line.strip():
+                v = json.loads(line)
+                assert "graded_at" in v
 
     def test_run_sets_finance_hub_now_in_env(self, tmp_path):
         """FINANCE_HUB_NOW must be present in the TrialEnv for frozen-fixture tasks."""
@@ -534,7 +545,7 @@ class TestHarnessRun:
                 return _make_import_transcript()
 
         results_root = tmp_path / "results"
-        run(TASK_R1, CapturingRunner(), results_root=results_root)
+        run(TASK_R1, CapturingRunner(), k=1, results_root=results_root)
         assert len(captured_envs) == 1
         assert "FINANCE_HUB_NOW" in captured_envs[0]
         assert captured_envs[0]["FINANCE_HUB_NOW"] == "2026-06-23T12:00:00+00:00"
@@ -563,7 +574,7 @@ class TestHarnessRun:
 
         results_root = tmp_path / "results"
         runner = self._make_mock_runner()
-        run_dir = run(TASK_R1, runner, results_root=results_root)
+        run_dir = run(TASK_R1, runner, k=1, results_root=results_root)
 
         meta = json.loads((run_dir / "meta.json").read_text())
         assert len(meta["prompt_hash"]) == 64
@@ -590,9 +601,9 @@ class TestHarnessRun:
                 return _make_import_transcript()
 
         results_root = tmp_path / "results"
-        run_dir = run(TASK_R1, RealImportRunner(), results_root=results_root)
+        run_dir = run(TASK_R1, RealImportRunner(), k=1, results_root=results_root)
 
-        verdicts_path = run_dir / "verdicts.jsonl"
+        verdicts_path = run_dir / "trial_0" / "verdicts.jsonl"
         verdicts = [json.loads(l) for l in verdicts_path.read_text().splitlines() if l.strip()]
         failing = [v for v in verdicts if v["verdict"] != "pass"]
         assert failing == [], f"Some graders failed: {failing}"
@@ -602,11 +613,11 @@ class TestHarnessRun:
 
         results_root = tmp_path / "results"
         runner = self._make_mock_runner()
-        run_dir = run(TASK_R1, self._make_mock_runner(), results_root=results_root)
+        run_dir = run(TASK_R1, self._make_mock_runner(), k=1, results_root=results_root)
         assert "R1" in run_dir.name
 
     def test_trial_dir_cleaned_up_after_run(self, tmp_path, monkeypatch):
-        """The ephemeral trial dir should not persist after run()."""
+        """All k ephemeral trial dirs should be cleaned up after run()."""
         import tempfile
         from evals.harness.harness import run
 
@@ -618,16 +629,289 @@ class TestHarnessRun:
                 self._inner = real_tmp_dir(**kwargs)
                 created_dirs.append(self._inner.name)
 
-            def __enter__(self):
-                return self._inner.__enter__()
+            @property
+            def name(self):
+                return self._inner.name
 
-            def __exit__(self, *args):
-                return self._inner.__exit__(*args)
+            def cleanup(self):
+                self._inner.cleanup()
 
         monkeypatch.setattr(tempfile, "TemporaryDirectory", TrackingTmpDir)
 
         results_root = tmp_path / "results"
-        run(TASK_R1, self._make_mock_runner(), results_root=results_root)
+        run(TASK_R1, self._make_mock_runner(), k=2, results_root=results_root)
 
-        assert len(created_dirs) == 1
-        assert not Path(created_dirs[0]).exists(), "trial dir was not cleaned up"
+        assert len(created_dirs) == 2, f"Expected 2 trial dirs, got {len(created_dirs)}"
+        for d in created_dirs:
+            assert not Path(d).exists(), f"trial dir {d} was not cleaned up"
+
+
+# ---------------------------------------------------------------------------
+# k-trial support: concurrent trials + pass^k / pass@k
+# ---------------------------------------------------------------------------
+
+class TestHarnessKTrials:
+    """k=3 concurrent trials, run dir layout, pass^k/pass@k composition."""
+
+    def _make_mock_runner(self) -> Runner:
+        class MockRunner(Runner):
+            async def run(self, prompt: str, env: TrialEnv) -> Transcript:
+                return _make_import_transcript()
+        return MockRunner()
+
+    def test_run_k1_creates_trial_0(self, tmp_path):
+        from evals.harness.harness import run
+
+        run_dir = run(TASK_R1, self._make_mock_runner(), k=1,
+                      results_root=tmp_path / "results")
+        assert (run_dir / "trial_0").is_dir()
+        assert (run_dir / "trial_0" / "transcript.jsonl").exists()
+        assert (run_dir / "trial_0" / "verdicts.jsonl").exists()
+
+    def test_run_k3_creates_three_trial_dirs(self, tmp_path):
+        from evals.harness.harness import run
+
+        run_dir = run(TASK_R1, self._make_mock_runner(), k=3,
+                      results_root=tmp_path / "results")
+        for i in range(3):
+            assert (run_dir / f"trial_{i}").is_dir(), f"trial_{i} missing"
+            assert (run_dir / f"trial_{i}" / "transcript.jsonl").exists()
+            assert (run_dir / f"trial_{i}" / "verdicts.jsonl").exists()
+
+    def test_meta_k_field(self, tmp_path):
+        from evals.harness.harness import run
+
+        run_dir = run(TASK_R1, self._make_mock_runner(), k=3,
+                      results_root=tmp_path / "results")
+        meta = json.loads((run_dir / "meta.json").read_text())
+        assert meta["k"] == 3
+
+    def test_meta_has_pass_k_and_pass_at_k(self, tmp_path):
+        from evals.harness.harness import run
+
+        run_dir = run(TASK_R1, self._make_mock_runner(), k=1,
+                      results_root=tmp_path / "results")
+        meta = json.loads((run_dir / "meta.json").read_text())
+        assert "pass_k" in meta
+        assert "pass_at_k" in meta
+        assert isinstance(meta["pass_k"], bool)
+        assert isinstance(meta["pass_at_k"], bool)
+
+    def test_meta_trials_array(self, tmp_path):
+        from evals.harness.harness import run
+
+        run_dir = run(TASK_R1, self._make_mock_runner(), k=2,
+                      results_root=tmp_path / "results")
+        meta = json.loads((run_dir / "meta.json").read_text())
+        assert "trials" in meta
+        assert len(meta["trials"]) == 2
+        for t in meta["trials"]:
+            assert "trial_idx" in t
+            assert "gate_pass" in t
+
+    def test_each_trial_has_own_transcript(self, tmp_path):
+        from evals.harness.harness import run
+
+        run_dir = run(TASK_R1, self._make_mock_runner(), k=2,
+                      results_root=tmp_path / "results")
+        for i in range(2):
+            t = run_dir / f"trial_{i}" / "transcript.jsonl"
+            lines = [l for l in t.read_text().splitlines() if l.strip()]
+            assert len(lines) > 0, f"trial_{i} transcript is empty"
+
+    def test_pass_k_true_when_all_gate_pass(self):
+        from evals.harness.harness import _compute_pass_k
+        from evals.harness.graders import GraderResult
+
+        all_verdicts = [
+            [GraderResult("g1", "gate", "pass", "")],
+            [GraderResult("g1", "gate", "pass", "")],
+            [GraderResult("g1", "gate", "pass", "")],
+        ]
+        assert _compute_pass_k(all_verdicts) is True
+
+    def test_pass_k_false_when_any_fail(self):
+        from evals.harness.harness import _compute_pass_k
+        from evals.harness.graders import GraderResult
+
+        all_verdicts = [
+            [GraderResult("g1", "gate", "pass", "")],
+            [GraderResult("g1", "gate", "fail", "")],
+            [GraderResult("g1", "gate", "pass", "")],
+        ]
+        assert _compute_pass_k(all_verdicts) is False
+
+    def test_pass_at_k_true_when_one_passes(self):
+        from evals.harness.harness import _compute_pass_at_k
+        from evals.harness.graders import GraderResult
+
+        all_verdicts = [
+            [GraderResult("g1", "gate", "fail", "")],
+            [GraderResult("g1", "gate", "pass", "")],
+            [GraderResult("g1", "gate", "fail", "")],
+        ]
+        assert _compute_pass_at_k(all_verdicts) is True
+
+    def test_pass_at_k_false_when_all_fail(self):
+        from evals.harness.harness import _compute_pass_at_k
+        from evals.harness.graders import GraderResult
+
+        all_verdicts = [
+            [GraderResult("g1", "gate", "fail", "")],
+            [GraderResult("g1", "gate", "fail", "")],
+        ]
+        assert _compute_pass_at_k(all_verdicts) is False
+
+    def test_regression_policy_is_pass_k(self, tmp_path):
+        """Regression suite should show pass^k verdict in meta."""
+        from evals.harness.harness import run
+
+        run_dir = run(TASK_R1, self._make_mock_runner(), k=1,
+                      results_root=tmp_path / "results")
+        meta = json.loads((run_dir / "meta.json").read_text())
+        assert meta["suite"] == "regression"
+
+    def test_k3_trials_run_concurrently_independent(self, tmp_path):
+        """k=3 trials complete successfully with independent transcripts."""
+        from evals.harness.harness import run
+
+        run_dir = run(TASK_R1, self._make_mock_runner(), k=3,
+                      results_root=tmp_path / "results")
+        for i in range(3):
+            lines = [
+                l for l in (run_dir / f"trial_{i}" / "transcript.jsonl")
+                .read_text().splitlines() if l.strip()
+            ]
+            assert len(lines) > 0, f"trial_{i} transcript empty"
+
+
+# ---------------------------------------------------------------------------
+# Re-grading: graders re-run against stored transcripts
+# ---------------------------------------------------------------------------
+
+class TestHarnessRegrade:
+    """regrade() re-runs graders, appends to verdicts.jsonl (spec §9 req 5)."""
+
+    def _make_mock_runner(self) -> Runner:
+        class MockRunner(Runner):
+            async def run(self, prompt: str, env: TrialEnv) -> Transcript:
+                return _make_import_transcript()
+        return MockRunner()
+
+    def test_regrade_appends_rows_to_verdicts_jsonl(self, tmp_path):
+        from evals.harness.harness import run, regrade
+
+        run_dir = run(TASK_R1, self._make_mock_runner(), k=1,
+                      results_root=tmp_path / "results")
+        verdicts_path = run_dir / "trial_0" / "verdicts.jsonl"
+        initial_count = sum(1 for l in verdicts_path.read_text().splitlines() if l.strip())
+
+        regrade(run_dir, TASK_R1)
+
+        after_count = sum(1 for l in verdicts_path.read_text().splitlines() if l.strip())
+        assert after_count > initial_count
+
+    def test_regrade_returns_verdicts_per_trial(self, tmp_path):
+        from evals.harness.harness import run, regrade
+
+        run_dir = run(TASK_R1, self._make_mock_runner(), k=2,
+                      results_root=tmp_path / "results")
+        results = regrade(run_dir, TASK_R1)
+        assert len(results) == 2
+        for trial_verdicts in results:
+            assert isinstance(trial_verdicts, list)
+
+    def test_regrade_check_graders_run_from_transcript(self, tmp_path):
+        """check graders re-run even without a db_path (transcript-only)."""
+        from evals.harness.harness import run, regrade
+
+        run_dir = run(TASK_R1, self._make_mock_runner(), k=1,
+                      results_root=tmp_path / "results")
+        results = regrade(run_dir, TASK_R1)
+
+        check_results = [
+            v for v in results[0]
+            if v.verdict in ("pass", "fail")
+        ]
+        assert len(check_results) > 0
+
+    def test_regrade_sql_graders_skip_without_db_path(self, tmp_path):
+        """sql graders return 'skip' when no db_path provided."""
+        from evals.harness.harness import run, regrade
+
+        run_dir = run(TASK_R1, self._make_mock_runner(), k=1,
+                      results_root=tmp_path / "results")
+        results = regrade(run_dir, TASK_R1)  # no db_paths
+
+        sql_skipped = [v for v in results[0] if v.verdict == "skip"]
+        # R1 has sql graders — they should be skipped without a db_path
+        assert len(sql_skipped) > 0
+
+    def test_regrade_verdicts_have_graded_at(self, tmp_path):
+        from evals.harness.harness import run, regrade
+
+        run_dir = run(TASK_R1, self._make_mock_runner(), k=1,
+                      results_root=tmp_path / "results")
+        results = regrade(run_dir, TASK_R1)
+
+        for v in results[0]:
+            assert v.graded_at is not None
+
+    def test_regrade_multiple_passes_keep_accumulating(self, tmp_path):
+        """Multiple regrade calls keep appending; initial rows are never overwritten."""
+        from evals.harness.harness import run, regrade
+
+        run_dir = run(TASK_R1, self._make_mock_runner(), k=1,
+                      results_root=tmp_path / "results")
+        verdicts_path = run_dir / "trial_0" / "verdicts.jsonl"
+        initial = sum(1 for l in verdicts_path.read_text().splitlines() if l.strip())
+
+        regrade(run_dir, TASK_R1)
+        after_one = sum(1 for l in verdicts_path.read_text().splitlines() if l.strip())
+
+        regrade(run_dir, TASK_R1)
+        after_two = sum(1 for l in verdicts_path.read_text().splitlines() if l.strip())
+
+        assert after_one > initial
+        assert after_two > after_one
+
+
+# ---------------------------------------------------------------------------
+# Suite report
+# ---------------------------------------------------------------------------
+
+class TestEmitSuiteReport:
+    """emit_suite_report reads run dirs and prints aggregated summary."""
+
+    def _make_mock_runner(self) -> Runner:
+        class MockRunner(Runner):
+            async def run(self, prompt: str, env: TrialEnv) -> Transcript:
+                return _make_import_transcript()
+        return MockRunner()
+
+    def test_emit_suite_report_no_results(self, tmp_path, capsys):
+        from evals.harness.harness import emit_suite_report
+
+        emit_suite_report(tmp_path / "empty_results")
+        out = capsys.readouterr().out
+        assert "No results" in out
+
+    def test_emit_suite_report_shows_task_row(self, tmp_path, capsys):
+        from evals.harness.harness import run, emit_suite_report
+
+        results_root = tmp_path / "results"
+        run(TASK_R1, self._make_mock_runner(), k=1, results_root=results_root)
+
+        emit_suite_report(results_root)
+        out = capsys.readouterr().out
+        assert "R1" in out
+
+    def test_emit_suite_report_shows_pass_k(self, tmp_path, capsys):
+        from evals.harness.harness import run, emit_suite_report
+
+        results_root = tmp_path / "results"
+        run(TASK_R1, self._make_mock_runner(), k=1, results_root=results_root)
+
+        emit_suite_report(results_root)
+        out = capsys.readouterr().out
+        assert "pass^k" in out.lower() or "PASS" in out or "FAIL" in out

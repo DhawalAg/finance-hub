@@ -30,10 +30,11 @@ evals/
 | Phase | Description | Status |
 |---|---|---|
 | 0 | Task collection (no code) | Complete — all 12 regression tasks authored |
-| 1 | Harness MVP (R1 end-to-end) | Not started |
-| 2 | Trajectory + breadth | Not started |
-| 3 | Judge + calibration | Not started |
-| 4 | Capability frontier | Not started |
+| 1 | Harness MVP (R1 end-to-end) | Complete — fixture, graders, harness, report |
+| 2 | pass^3, concurrent trials, re-grading, per-run report | Complete — #46 |
+| 3 | Trajectory + breadth | Not started |
+| 4 | Judge + calibration | Not started |
+| 5 | Capability frontier | Not started |
 
 ## Phase 0 Tasks Authored
 

@@ -20,9 +20,10 @@ from evals.harness.runner import Transcript
 class GraderResult:
     grader_id: str
     role: str           # gate | track | flag
-    verdict: str        # pass | fail
+    verdict: str        # pass | fail | skip
     detail: str
     actual: Any = field(default=None)
+    graded_at: str | None = field(default=None)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -31,6 +32,7 @@ class GraderResult:
             "verdict": self.verdict,
             "detail": self.detail,
             "actual": self.actual,
+            "graded_at": self.graded_at,
         }
 
 
@@ -69,12 +71,15 @@ def _find_tool_result(transcript: Transcript, tool_name: str) -> Any:
     return None
 
 
-def _run_sql_grader(spec: dict, db_path: Path) -> GraderResult:
+def _run_sql_grader(spec: dict, db_path: Path | None) -> GraderResult:
     gid = spec["id"]
     role = spec.get("role", "gate")
     detail = spec.get("detail", "")
     sql = spec["sql"]
     expected = spec["expect"]
+
+    if db_path is None:
+        return GraderResult(gid, role, "skip", detail, actual="sql grader skipped: no db_path")
 
     try:
         with sqlite3.connect(db_path) as conn:
@@ -111,7 +116,7 @@ def _run_check_grader(spec: dict, transcript: Transcript) -> GraderResult:
 
 def grade(
     transcript: Transcript,
-    db_path: Path,
+    db_path: Path | None,
     workspace: Path,
     task: dict,
 ) -> list[GraderResult]:
