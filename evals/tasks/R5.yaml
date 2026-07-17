@@ -1,0 +1,199 @@
+id: R5
+title: "DCA plan generation from ready fixture — full §6.1 outcome-grader assertion set"
+version: "1"
+suite: regression
+workflow: planning
+fixture: dca_ready_deployment
+  # DB seeded with:
+  #   - 1 portfolio snapshot (snap_r5_fixture, as_of 2026-06-20T16:00:00+00:00)
+  #     containing: VTI (25 sh, $6,052.50 MV, brokerage/cash), AAPL (10 sh, $1,905.00, brokerage/cash),
+  #     QQQ (5 sh, $2,401.00, ira/margin), FCASH** ($1,234.56 cash)
+  #   - fin_instruments: VTI (etf/broad_market_etf), AAPL (stock/single_stock),
+  #     QQQ (etf/broad_market_etf) — all with note_path set and active source links
+  #   - fin_strategy_versions: strat_r5_v1 (active), sleeves:
+  #       broad_market (target_weight_bps=7000, 70%), single_stock (3000, 30%)
+  #   - fin_strategy_instruments: VTI→broad_market, QQQ→broad_market, AAPL→single_stock
+  #     (all with source_theme_key and conviction set, matching approved theme-instrument rows)
+  #   - fin_price_bars: 60 days of bars for VTI, AAPL, QQQ (source=fixture, up to 2026-06-20)
+  #   - fin_metrics: stored metrics pack for VTI, AAPL, QQQ
+  #   - fin_themes: theme_r5 (status=watching), with VTI/QQQ/AAPL mapped and approved
+  #   - fin_research_sources + links: ≥2 active source links per instrument
+  #   - fin_instruments.note_path set for AAPL (thesis required for single_stock)
+  #   - workspace/research/instruments/AAPL.md: stub thesis note present
+now: "2026-06-23T12:00:00+00:00"
+  # 3 days after snapshot as_of — within the "fresh" freshness band (≤7 days).
+
+prompt: |
+  Generate a DCA deployment plan.
+  - Portfolio snapshot ID: snap_r5_fixture (already imported)
+  - Strategy version: strat_r5_v1 (already active)
+  - Deployable cash: $1,000
+  - DCA budget: $1,000 (all DCA, no one-time buys)
+  - Cadence: monthly
+  - Risk mode: balanced
+
+reference:
+  description: >
+    The plan is generated as a deployment_draft with status proposed (no warnings
+    expected from this clean fixture). All three instruments are DCA-eligible:
+    VTI and QQQ are broad_market_etf (no thesis required), AAPL has thesis+citations.
+    Lines are buy-only DCA; sum of line amounts ≤ $1,000. Every line has an evidence
+    reference to fin_price_bars; AAPL also references its thesis note. The output
+    mode is deployment_draft; the memo artifact appears in workspace/drafts/.
+
+  plan:
+    output_mode: "deployment_draft"
+    status: "proposed"
+    portfolio_snapshot_id: "snap_r5_fixture"
+    strategy_version_id: "strat_r5_v1"
+    deployable_cash_micros: 1000000000   # $1,000.00
+    dca_budget_micros: 1000000000
+    one_time_buy_budget_micros: 0
+    bucket: "dca"                         # all lines are dca bucket
+    snapshot_freshness_band: "fresh"      # 3 days old
+
+  # §6.1 assertion set — one assertion per reasoning step
+  assertions:
+    - id: snapshot_imported_with_correct_as_of
+      description: "portfolio snapshot snap_r5_fixture exists with as_of=2026-06-20T16:00:00+00:00"
+      sql: >
+        SELECT COUNT(*) FROM fin_portfolio_snapshots
+        WHERE snapshot_id = 'snap_r5_fixture'
+        AND as_of = '2026-06-20T16:00:00+00:00'
+      expect: 1
+
+    - id: plan_row_exists
+      description: "fin_deployment_plans has exactly 1 row after the trial"
+      sql: "SELECT COUNT(*) FROM fin_deployment_plans WHERE output_mode = 'deployment_draft'"
+      expect: 1
+
+    - id: plan_is_buy_only
+      description: "all plan lines are bucket=dca (no one_time lines)"
+      sql: "SELECT COUNT(*) FROM fin_deployment_plan_lines WHERE bucket = 'one_time'"
+      expect: 0
+
+    - id: lines_within_deployable_cash
+      description: "sum of DCA line amounts ≤ deployable_cash_micros ($1,000)"
+      sql: >
+        SELECT CASE WHEN SUM(amount_micros) <= 1000000000 THEN 1 ELSE 0 END
+        FROM fin_deployment_plan_lines l
+        JOIN fin_deployment_plans p ON l.plan_id = p.plan_id
+        WHERE p.output_mode = 'deployment_draft'
+      expect: 1
+
+    - id: all_line_tickers_in_active_strategy
+      description: "every line ticker is in fin_strategy_instruments for strat_r5_v1"
+      sql: >
+        SELECT COUNT(*) FROM fin_deployment_plan_lines l
+        JOIN fin_deployment_plans p ON l.plan_id = p.plan_id
+        WHERE p.output_mode = 'deployment_draft'
+        AND l.ticker NOT IN (
+          SELECT ticker FROM fin_strategy_instruments
+          WHERE version_id = 'strat_r5_v1'
+        )
+      expect: 0    # zero lines with tickers not in the strategy
+
+    - id: every_line_has_price_evidence_ref
+      description: "every DCA line has ≥1 evidence row of type 'price' in fin_deployment_plan_evidence"
+      sql: >
+        SELECT COUNT(*) FROM fin_deployment_plan_lines l
+        JOIN fin_deployment_plans p ON l.plan_id = p.plan_id
+        WHERE p.output_mode = 'deployment_draft'
+        AND l.line_id NOT IN (
+          SELECT DISTINCT line_id FROM fin_deployment_plan_evidence
+          WHERE evidence_type = 'price'
+        )
+      expect: 0    # zero lines missing price evidence
+
+    - id: price_evidence_refs_resolve
+      description: "every price evidence ref_key (ticker) has rows in fin_price_bars"
+      sql: >
+        SELECT COUNT(*) FROM fin_deployment_plan_evidence e
+        JOIN fin_deployment_plans p ON e.plan_id = p.plan_id
+        WHERE p.output_mode = 'deployment_draft'
+        AND e.evidence_type = 'price'
+        AND e.ref_key NOT IN (SELECT DISTINCT ticker FROM fin_price_bars)
+      expect: 0    # zero dangling price refs
+
+    - id: output_mode_matches_freshness
+      description: "output_mode is deployment_draft when snapshot is fresh (≤7 days)"
+      sql: >
+        SELECT output_mode FROM fin_deployment_plans
+        WHERE output_mode = 'deployment_draft'
+        LIMIT 1
+      expect: "deployment_draft"
+
+    - id: plan_status_not_approved
+      description: "draft task — plan must NOT have status=approved (over-eager approval fails)"
+      sql: >
+        SELECT COUNT(*) FROM fin_deployment_plans WHERE status = 'approved'
+      expect: 0
+
+    - id: memo_artifact_exists
+      description: "memo artifact written to workspace/drafts/ (filesystem check)"
+      check: "workspace('drafts/').glob('*.md') is non-empty"
+
+graders:
+  - id: outcome.snapshot_imported_with_correct_as_of
+    role: gate
+  - id: outcome.plan_row_exists
+    role: gate
+  - id: outcome.plan_is_buy_only
+    role: gate
+  - id: outcome.lines_within_deployable_cash
+    role: gate
+  - id: outcome.all_line_tickers_in_active_strategy
+    role: gate
+  - id: outcome.every_line_has_price_evidence_ref
+    role: gate
+  - id: outcome.price_evidence_refs_resolve
+    role: gate
+  - id: outcome.output_mode_matches_freshness
+    role: gate
+  - id: outcome.plan_status_not_approved
+    role: gate
+  - id: outcome.memo_artifact_exists
+    role: gate
+  - id: trajectory.readiness_check_called
+    role: track
+    detail: "plan_readiness_check is NOT expected before generation (it's a pre-approval gate,
+             not a pre-generation gate). Track to confirm agent does not call it prematurely."
+  - id: trajectory.tools_turn_count
+    role: track
+    detail: "number of turns to complete the task; baseline for cross-version comparison"
+
+provenance: >
+  Spec §10 R5 — full §6.1 assertion set for the DCA plan generation workflow.
+  Format-stresser: exercises all outcome-grader assertion types (SQL count, SQL value,
+  SQL join, filesystem). Golden run deferred to bulk-authoring ticket #42.
+
+ambiguity_notes:
+  - |
+    INITIAL AMBIGUITY: "Generate DCA plan from ready fixture" did not say whether
+    plan_readiness_check should be called before or after generation. It is a
+    pre-APPROVAL gate, not a pre-generation gate. FIX: task prompt does not ask the
+    agent to check readiness; the trajectory grader tracks (not gates) the call to
+    confirm the agent does not call it prematurely.
+
+  - |
+    INITIAL AMBIGUITY: "Full §6.1 assertion set" is a spec reference, not a concrete
+    list. FIX: every assertion from §6.1's illustrative list is mapped to a specific
+    SQL query or filesystem check in this task's reference.assertions block.
+
+  - |
+    INITIAL AMBIGUITY: does "buy-only" mean no one_time lines, or also no short/sell
+    lines? The tool does not support short/sell in v1; the check is bucket != 'one_time'
+    for a DCA-only run. FIX: explicit assertion plan_is_buy_only checks bucket='one_time'
+    count = 0 (the DCA-only case).
+
+  - |
+    INITIAL AMBIGUITY: does the memo artifact check verify content or just existence?
+    FIX: reference solution requires existence only (the "generated-do-not-edit" header
+    is a memo implementation detail; grading content requires an LLM judge — deferred
+    to Phase 3). Trajectory grader tracks turns for efficiency comparison.
+
+  - |
+    INITIAL AMBIGUITY: broad_market_etf instruments (VTI, QQQ) do not require a thesis
+    note for DCA eligibility. AAPL (single_stock) does. FIX: fixture explicitly seeds
+    AAPL with a note_path and the research note file in the workspace. The fixture
+    description above enumerates these requirements so the fixture builder cannot miss them.

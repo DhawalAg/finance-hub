@@ -1,0 +1,94 @@
+id: thesis_quality
+version: "1"
+description: >
+  Rubric for grading the quality of an instrument research thesis note stored by the
+  finance agent. Applied by a pinned LLM judge (Sonnet 5 per §6.3). Scores each
+  dimension 1–5; flag threshold is any dimension < 3. Verdicts do not gate — they
+  FLAG for human review (§6.3).
+
+judge_model: "claude-sonnet-5"
+call_shape: >
+  One judge call per graded trial, returning a structured verdict with separate
+  score (1-5) and justification string per dimension. Results stored as
+  per-dimension rows in the results store regardless of call structure.
+
+dimensions:
+  groundedness:
+    description: >
+      Every material claim in the thesis is supported by a linked source or evidence
+      reference in the store. A "material claim" is any factual assertion about the
+      instrument (revenue figures, market share, growth rates, competitive dynamics).
+      Opinions and qualitative framing do not need citations; facts do.
+    scoring:
+      5: All material claims have corresponding source IDs registered in the DB and
+         are attributable to those sources via inline citation or proximity.
+      4: Nearly all material claims are cited; at most 1-2 minor facts are uncited
+         but could be considered general knowledge.
+      3: Most claims cited; a few material facts lack support but the thesis is still
+         substantially grounded.
+      2: Several material claims are uncited or the cited sources are not plausibly
+         connected to the claims made.
+      1: The thesis makes substantial factual claims with no source support, or cites
+         sources that demonstrably do not support the claims.
+    flag_below: 3
+
+  coverage:
+    description: >
+      The thesis addresses the key facts the task defined as mandatory for a competent
+      analysis of this instrument. Coverage is about substance, not word count — a
+      short but accurate treatment of a topic counts.
+    key_facts_source: "evals/tasks/R3.yaml#graders.judge.thesis_quality.coverage_key_facts"
+    scoring:
+      5: All 5 required key facts are addressed with substantive treatment.
+      4: 4 of 5 key facts addressed; the missing one is minor or implied by another.
+      3: 3 of 5 key facts addressed with substance; the thesis is still usable.
+      2: Only 2 key facts addressed, or several are mentioned superficially without
+         substantive content.
+      1: Fewer than 2 key facts addressed, or the thesis is largely off-topic.
+    flag_below: 3
+
+  source_quality:
+    description: >
+      The sources consulted are authoritative for the type of claim they support. An
+      authoritative source is one a competent analyst would cite: SEC filings, earnings
+      transcripts, established financial publishers (Bloomberg, WSJ, FT), company IR
+      pages, or recognized industry databases. First-retrieved sources that are not
+      authoritative for the claim type count against this dimension.
+    scoring:
+      5: All cited sources are authoritative for their claim type; no low-quality
+         or irrelevant sources.
+      4: Mostly authoritative sources; at most 1 source is marginal but not harmful.
+      3: Mix of authoritative and marginal sources; the core claims are still supported
+         by at least one authoritative source each.
+      2: Several claims rely primarily on marginal or unestablished sources.
+      1: Cited sources are not authoritative for the claims made, or the sources are
+         inaccessible/unverifiable.
+    flag_below: 3
+
+judge_instructions: >
+  You are grading a research thesis note produced by a finance agent for the instrument
+  AAPL (Apple Inc). The note was written and stored via the finance hub tools during an
+  eval trial.
+
+  Your inputs are:
+  - The full text of the thesis note (workspace/research/instruments/AAPL.md)
+  - The list of source IDs registered in fin_research_sources for this instrument
+  - The list of active source links in fin_research_source_links (scope=instrument, key=AAPL)
+  - The task's coverage_key_facts list
+
+  Score each dimension from 1 to 5 and provide a 1-2 sentence justification per dimension.
+  Do NOT penalise the agent for topics not in the coverage_key_facts list. Do NOT reward
+  length over substance. Produce your verdict in the structured format specified by the
+  harness.
+
+  Your verdict DOES NOT determine pass/fail — it FLAGS the trial for human review if any
+  dimension is below the threshold. Score what you observe; the human reviewer decides
+  what to do with the flag.
+
+calibration_notes: >
+  Initial calibration pass at Phase 3 (spec §11). Tune the rubric until SME (Dhawal)
+  and judge mostly agree. Track disagreement patterns — if groundedness and coverage
+  always move together, consider whether they can be split into separate calls (§6.3
+  calibration trigger: lockstep scores where SME's don't). The threshold of < 3 is a
+  first-pass choice; adjust at calibration if it produces too many or too few flags on
+  real transcripts.
