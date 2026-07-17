@@ -9,6 +9,9 @@ Accepted
 > 2026-07-16: the skill definition-of-done is extended by
 > [ADR 0006](0006-skills-ship-with-capability-eval-tasks.md) — skills ship with capability eval
 > tasks.
+> 2026-07-17: skills' physical home is fixed by
+> [ADR 0007](0007-runtime-surface-lives-in-a-top-level-runtime-directory.md) — the runtime surface,
+> skills included, lives under a top-level `runtime/`.
 
 ## Context
 

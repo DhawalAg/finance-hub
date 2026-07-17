@@ -6,6 +6,11 @@ Date: 2026-07-16
 
 Accepted (ratified via issue #28; extends the skill definition-of-done in ADR 0005)
 
+> 2026-07-17: the skill definition-of-done is extended further by
+> [ADR 0007](0007-runtime-surface-lives-in-a-top-level-runtime-directory.md) — a skill-shipping PR
+> also places the skill under `runtime/skills/`, adds its materialization-list entry, and creates its
+> `.claude/skills/` symlink.
+
 ## Context
 
 ADR 0005 makes skills the orchestration layer over deterministic tools, and the agent-evals spec
