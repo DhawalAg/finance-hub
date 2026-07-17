@@ -6,6 +6,10 @@ Date: 2026-07-04
 
 Accepted
 
+> 2026-07-16: the skill definition-of-done is extended by
+> [ADR 0006](0006-skills-ship-with-capability-eval-tasks.md) — skills ship with capability eval
+> tasks.
+
 ## Context
 
 Agent-facing finance systems can be built at two layers, and it is tempting to treat them as
