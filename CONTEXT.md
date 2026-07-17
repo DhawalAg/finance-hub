@@ -127,6 +127,11 @@ review and one-time-buy eligibility.
 
 ### Evals
 
+Terms for evaluating the agent. Mechanics — the prompt hash, suite triggers, grader tiers — live in
+the agent-evals spec (`docs/requests/evals/spec.md`), which also defines the **system under test**
+(SUT): the whole agent stack being evaluated — model, runtime surface, tool registry, MCP server,
+and SQLite store.
+
 **Task**:
 One eval test case: a fixture, a prompt, a reference solution, and a set of graders. Written so two
 competent reviewers would agree on what success means.
@@ -140,22 +145,25 @@ The complete record of a trial — every tool call, its arguments, its result, a
 persisted durably so graders can re-run without re-running the trial.
 
 **Outcome**:
-The durable state left behind by a trial: rows in the SQLite store and artifacts in the workspace,
-per the ownership rules above. Never the agent's claim that something happened.
+The durable state left behind by a trial: rows in the SQLite store and artifacts in the trial
+workspace. Never the agent's claim that something happened — a plan is approved when the plan row's
+status says so, not when the transcript says so.
 
 **Grader**:
 A function scoring one aspect of a trial; tasks compose multiple graders, each producing one verdict
-plus detail. Distinct from candidate review, which is a research judgment about an instrument, not a
-score of an agent run.
+plus detail. Distinct from candidate review, which is a research judgment about an instrument or
+theme, not a score of an agent run.
 
 **Suite**:
-A named collection of tasks. Two kinds: regression (should pass ~100%; a drop is a defect) and
-capability (expected to start low; measures the frontier).
+A named collection of eval tasks — distinct from the pytest suite, which tests the tools
+deterministically. Two kinds: regression (should pass ~100%; a drop is a defect) and capability
+(expected to start low; measures the frontier).
 
 **Gate / Track / Flag**:
-The three verdict roles a grader can play. Gate fails the trial; Track records a metric for
-cross-version comparison without failing; Flag routes the transcript to human review instead of
-failing.
+The three verdict roles a grader can play. Gate fails the trial (outcome wrong); Track records a
+metric for cross-version comparison without failing (turns, tokens, trajectory quality); Flag routes
+the transcript to human review instead of failing (subjective quality below threshold, suspicious
+trace patterns).
 
 **pass@k / pass^k**:
 pass@k: at least one of k trials succeeded (fine for research exploration). pass^k: all k trials
@@ -173,8 +181,7 @@ The factory, not the product; it never enters a trial.
 
 **Materialization list**:
 The checked-in manifest under `evals/` naming every runtime-surface file the harness copies into a
-trial directory. It is the sole authority on what is in the system under test and the exact input to
-the prompt hash.
+trial directory; the exact input to the prompt hash. A file not on the list never enters a trial.
 
 **Adoption boundary**:
 The moment before a change to a versioned system-under-test component (model pin, skill set, prompt
