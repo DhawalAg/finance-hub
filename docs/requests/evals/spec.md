@@ -62,8 +62,9 @@ the hash and never trigger runs.
 
 **Two CLAUDE.md sets.** The runtime-only CLAUDE.md copied into every trial dir is a real
 versioned artifact — the first draft of what a deployed finance-hub ships with, not just eval
-plumbing — distinct from the root dev CLAUDE.md. Its home is decided at Phase 1 (e.g. `evals/sut/`
-or `runtime/`); the line-by-line audit splitting today's CLAUDE.md happens once, at Phase 0/1
+plumbing — distinct from the root dev CLAUDE.md. Its home is `runtime/` (settled by ADR 0007, which
+post-dates this spec's Phase-1 deferral); the line-by-line audit splitting today's CLAUDE.md
+happens once, at Phase 0/1
 task-writing (§11). New runtime files enter via the ADR-0006 skill DoD: shipping a skill includes
 adding it to the materialization list (§7).
 
@@ -77,47 +78,15 @@ Three evaluation layers, only two of which are this spec's scope:
 
 ## 3. Vocabulary
 
-These terms extend the CONTEXT.md Language section and should migrate there once the spec is
-accepted.
+The canonical definitions for this spec's terms — task, trial, transcript, outcome, grader, suite,
+gate/track/flag, pass@k/pass^k, runtime surface, dev scaffolding, materialization list, adoption
+boundary — live in the root [CONTEXT.md](../../../CONTEXT.md) Language section under **Evals**
+(migrated per #36); update terms there, not here. Where this spec restates a term (e.g. §2's
+introduction of the runtime surface), the restatement is mechanism context, not a competing
+definition.
 
-**Task**: One test case — a fixture, a prompt, a reference solution, and a set of graders. Written
-so two competent reviewers would agree on what success means.
-
-**Trial**: One agent attempt at a task. Tasks run as multiple trials because the SUT is
-non-deterministic.
-
-**Transcript**: The complete record of a trial — every tool call, its arguments, its result, and
-all agent text. Persisted durably so graders can be re-run without re-running trials.
-
-**Outcome**: The durable state after a trial — rows in the SQLite store and artifacts in the
-workspace. *Never* the agent's claim that something happened. A plan is approved when
-`fin_deployment_plans.status` says so, not when the transcript says "I approved the plan."
-
-**Grader**: A function scoring one aspect of a trial. Tasks compose multiple graders; each grader
-produces one verdict plus detail.
-
-**Suite**: A named collection of tasks. Two kinds — **regression** (should pass ~100%; a drop is a
-defect) and **capability** (expected to start low; measures the frontier).
-
-**Gate / Track / Flag**: The three verdict roles. *Gate* fails the trial (outcome wrong). *Track*
-records a metric for cross-version comparison without failing (turns, tokens, trajectory quality).
-*Flag* routes the transcript to human review instead of failing (subjective quality below
-threshold, suspicious trace patterns).
-
-**pass@k / pass^k**: pass@k = at least one of k trials succeeded (fine for research exploration).
-pass^k = all k trials succeeded (the bar for money-adjacent flows, where consistency is the
-product).
-
-**Runtime surface / dev scaffolding**: The repo's two prompt surfaces (§2). The runtime surface
-(runtime CLAUDE.md, skills, MCP config) is part of the SUT and is all a trial ever loads; dev
-scaffolding (root CLAUDE.md, `docs/agents/**`, process docs) never enters a trial.
-
-**Materialization list**: The checked-in manifest under `evals/` naming every runtime-surface
-file the harness copies into a trial dir; also the exact input to the §8.3 prompt hash.
-
-**Adoption boundary**: The moment before a change to a versioned SUT component (model pin, skill
-set, prompt surface) is adopted. The regression suite runs at adoption boundaries, not on every
-edit (§8.1).
+**SUT** stays spec-local shorthand for the §2 system under test; it is deliberately not a
+CONTEXT.md term.
 
 ## 4. The Outcome Is The Database
 
@@ -529,4 +498,5 @@ where each landed in this spec:
    ([#30](https://github.com/DhawalAg/finance-hub/issues/30)): k=3 on every triggered run, no
    k=1 smoke tier; triggers are adoption boundaries detected by prompt-hash/model-pin change;
    runtime surface vs dev scaffolding separated via a checked-in materialization list; two
-   CLAUDE.md sets. Folded into §2, §3, §8.1, §8.3, §9.
+   CLAUDE.md sets. Folded into §2, §3, §8.1, §8.3, §9; the §3 vocabulary has since migrated to
+   CONTEXT.md's Language section (Evals, #36).
