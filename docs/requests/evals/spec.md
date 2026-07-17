@@ -108,14 +108,14 @@ threshold, suspicious trace patterns).
 pass^k = all k trials succeeded (the bar for money-adjacent flows, where consistency is the
 product).
 
-**Runtime surface / dev scaffolding**: the repo's two prompt surfaces (§2). The runtime surface
+**Runtime surface / dev scaffolding**: The repo's two prompt surfaces (§2). The runtime surface
 (runtime CLAUDE.md, skills, MCP config) is part of the SUT and is all a trial ever loads; dev
 scaffolding (root CLAUDE.md, `docs/agents/**`, process docs) never enters a trial.
 
-**Materialization list**: the checked-in manifest under `evals/` naming every runtime-surface
+**Materialization list**: The checked-in manifest under `evals/` naming every runtime-surface
 file the harness copies into a trial dir; also the exact input to the §8.3 prompt hash.
 
-**Adoption boundary**: the moment before a change to a versioned SUT component (model pin, skill
+**Adoption boundary**: The moment before a change to a versioned SUT component (model pin, skill
 set, prompt surface) is adopted. The regression suite runs at adoption boundaries, not on every
 edit (§8.1).
 
@@ -387,8 +387,8 @@ adoptions ship their tasks in the same PR as the skill.
   model, prompt hash, skill set; plus task/fixture/harness/rubric+judge versions and
   timing/cost), one transcript JSONL per trial (§9), and `verdicts.jsonl` appended by
   grade/re-grade passes. Immutable once written; each run dir is a self-contained, portable
-  artifact. Because §9.5 re-grading makes verdicts *derived* data, any database over them is
-  logically a cache.
+  artifact. Because re-grading (§9, requirement 5) makes verdicts *derived* data, any database
+  over them is logically a cache.
 - **The prompt hash** is computed over exactly the materialized runtime surface (§2): the files
   the materialization list names, as copied into trial dirs.
 - **Query layer: lazy, derived SQLite.** `evals/results/results.db` is added only when cross-run
