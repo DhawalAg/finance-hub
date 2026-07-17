@@ -1,0 +1,184 @@
+id: R4
+title: "Promote approved candidates → versioned strategy snapshot (explicit tool)"
+version: "1"
+suite: regression
+workflow: strategy
+fixture: approved_candidates_ready_for_promotion
+  # DB seeded with:
+  #   - fin_themes: theme_r4 (status=watching, display_name="Core Equities")
+  #   - fin_theme_instruments:
+  #       VTI (etf/broad_market_etf, status=approved, conviction=5,
+  #            conviction_note="Total market at lowest cost — essential DCA backbone")
+  #       QQQ (etf/broad_market_etf, status=approved, conviction=3,
+  #            conviction_note="Acceptable tech tilt; diversification at 30% of broad sleeve")
+  #       AAPL (stock/single_stock, status=approved, conviction=3,
+  #             conviction_note="Services growth offsets hardware saturation risk")
+  #   - fin_instruments: VTI, QQQ (no note_path required — broad_market_etf),
+  #                       AAPL (note_path=research/instruments/AAPL.md)
+  #   - workspace/research/instruments/AAPL.md: stub thesis present
+  # NOT pre-seeded: strategy version (the promotion is the action under test)
+  # Seed steps:
+  #   1. migrations.run() on a temp DB.
+  #   2. set_theme(key='theme_r4', display_name='Core Equities', status='watching')
+  #   3. map_instruments(theme_key='theme_r4', instruments=[VTI, QQQ, AAPL as candidates])
+  #   4. review_instrument × 3 (approve all with conviction + note)
+  #   5. set_research_note(scope='instrument', key='AAPL', body='...')
+now: "2026-07-01T12:00:00+00:00"
+
+prompt: |
+  The theme "theme_r4" (Core Equities) has three approved candidates: VTI, QQQ, and AAPL.
+  Promote them to a new strategy version.
+
+  Create strategy version "strat_r4_v1" with label "Core Equities v1" using
+  finance.promote_to_strategy with confirm=True.
+
+  Sleeves:
+    - sleeve "broad_market" with target weight 70% — instruments: VTI, QQQ
+    - sleeve "single_stock" with target weight 30% — instruments: AAPL
+
+  After promotion, confirm:
+  1. The strategy version exists with status "draft".
+  2. The sleeve targets sum to 100%.
+  3. AAPL is in the single_stock sleeve; VTI and QQQ are in broad_market.
+
+  Do NOT activate the strategy — leave it as a draft for human review.
+
+reference:
+  description: >
+    promote_to_strategy creates an immutable versioned snapshot of the approved
+    candidates. fin_strategy_versions has 1 row with version_id=strat_r4_v1 and
+    status=draft. fin_strategy_sleeves has 2 rows summing to 10000 bps (100%).
+    fin_strategy_instruments has 3 rows assigned to their sleeves. The source_theme_key
+    column on each instrument row traces back to theme_r4.
+
+  strategy_version:
+    version_id: "strat_r4_v1"
+    label: "Core Equities v1"
+    status: "draft"
+    targets_sum_bps: 10000    # 100%
+    targets_complete: true
+
+  sleeves:
+    - sleeve_key: "broad_market"
+      target_weight_bps: 7000    # 70%
+    - sleeve_key: "single_stock"
+      target_weight_bps: 3000    # 30%
+
+  instruments:
+    - ticker: "VTI"
+      primary_sleeve_key: "broad_market"
+      source_theme_key: "theme_r4"
+    - ticker: "QQQ"
+      primary_sleeve_key: "broad_market"
+      source_theme_key: "theme_r4"
+    - ticker: "AAPL"
+      primary_sleeve_key: "single_stock"
+      source_theme_key: "theme_r4"
+
+  # Golden transcript path (relative to evals/)
+  golden: "tasks/R4/golden/transcript.jsonl"
+
+graders:
+  - id: outcome.strategy_version_created
+    role: gate
+    detail: "fin_strategy_versions has strat_r4_v1 with status=draft"
+    sql: >
+      SELECT COUNT(*) FROM fin_strategy_versions
+      WHERE version_id = 'strat_r4_v1'
+      AND status = 'draft'
+    expect: 1
+
+  - id: outcome.version_not_active
+    role: gate
+    detail: "task says leave as draft — no active strategies allowed"
+    sql: >
+      SELECT COUNT(*) FROM fin_strategy_versions WHERE status = 'active'
+    expect: 0
+
+  - id: outcome.sleeves_sum_to_100
+    role: gate
+    detail: "sleeve target_weight_bps sum = 10000 (exactly 100%)"
+    sql: >
+      SELECT SUM(target_weight_bps) FROM fin_strategy_sleeves
+      WHERE version_id = 'strat_r4_v1'
+    expect: 10000
+
+  - id: outcome.three_instruments_in_strategy
+    role: gate
+    detail: "fin_strategy_instruments has 3 rows for strat_r4_v1"
+    sql: >
+      SELECT COUNT(*) FROM fin_strategy_instruments
+      WHERE version_id = 'strat_r4_v1'
+    expect: 3
+
+  - id: outcome.aapl_in_single_stock_sleeve
+    role: gate
+    detail: "AAPL is assigned to the single_stock sleeve in strat_r4_v1"
+    sql: >
+      SELECT COUNT(*) FROM fin_strategy_instruments
+      WHERE version_id = 'strat_r4_v1'
+      AND ticker = 'AAPL'
+      AND primary_sleeve_key = 'single_stock'
+    expect: 1
+
+  - id: outcome.vti_qqq_in_broad_market_sleeve
+    role: gate
+    detail: "VTI and QQQ are assigned to the broad_market sleeve"
+    sql: >
+      SELECT COUNT(*) FROM fin_strategy_instruments
+      WHERE version_id = 'strat_r4_v1'
+      AND ticker IN ('VTI', 'QQQ')
+      AND primary_sleeve_key = 'broad_market'
+    expect: 2
+
+  - id: outcome.source_theme_keys_set
+    role: gate
+    detail: "all strategy instruments trace back to theme_r4 via source_theme_key"
+    sql: >
+      SELECT COUNT(*) FROM fin_strategy_instruments
+      WHERE version_id = 'strat_r4_v1'
+      AND (source_theme_key IS NULL OR source_theme_key != 'theme_r4')
+    expect: 0    # zero instruments missing their source_theme_key
+
+  - id: trajectory.promotion_tool_used
+    role: gate
+    detail: >
+      finance.promote_to_strategy must appear in the transcript with confirm=True.
+      Any path that creates a strategy version without this tool is a boundary
+      violation (ADR 0003) — strategy state must transition through explicit promotion.
+
+provenance: >
+  Spec §10 R4 — promote approved candidates; verify versioned snapshot.
+  Exercises finance.promote_to_strategy and confirms the immutable snapshot
+  properties: version_id, sleeve targets, instrument-to-sleeve assignment,
+  and source_theme_key provenance. §5.3 negative check: version left as draft
+  (no activate_strategy call) — the grader asserts status=draft and 0 active versions.
+
+ambiguity_notes:
+  - |
+    INITIAL AMBIGUITY: "Promote approved candidates" — does this require calling
+    candidate_evidence first to confirm promotion-readiness, or does promote_to_strategy
+    take care of validation internally? FIX: prompt does not require
+    candidate_evidence; the fixture pre-seeds approved candidates. The trajectory
+    grader checks that promote_to_strategy with confirm=True is called — no other
+    validation step is required.
+
+  - |
+    INITIAL AMBIGUITY: "Versioned snapshot" — what does "versioned" mean?
+    FIX: a strategy_version row with a stable version_id that never changes
+    once created. The grader checks version_id='strat_r4_v1' to confirm the
+    exact ID was used, ensuring the harness can reference it by id.
+
+  - |
+    INITIAL AMBIGUITY: does promote_to_strategy automatically activate the strategy,
+    or does it create a draft? FIX: by default promote_to_strategy creates a draft;
+    activate_strategy is a separate step. The prompt explicitly says "do NOT activate"
+    and the grader asserts status=draft with 0 active versions — an agent that
+    calls activate_strategy also fails this task.
+
+  - |
+    INITIAL AMBIGUITY: does AAPL (single_stock) require a thesis note for promotion?
+    FIX: promote_to_strategy does not enforce note requirements; that enforcement
+    is at plan generation time. The fixture pre-seeds a stub thesis (AAPL.md) so
+    the fixture is realistic, but the promotion itself succeeds regardless. A later
+    grader at plan generation time would gate on the thesis — not here.

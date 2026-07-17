@@ -1,0 +1,147 @@
+id: R6
+title: "Approve a valid draft deployment plan → status transition + approved memo"
+version: "1"
+suite: regression
+workflow: planning
+fixture: proposed_plan_ready_for_approval
+  # DB seeded with a proposed deployment plan that is ready to approve.
+  # fin_deployment_plans: 1 row
+  #   plan_id: plan_r6_fixture
+  #   output_mode: deployment_draft
+  #   status: proposed
+  #   portfolio_snapshot_id: snap_r6_fixture (as_of 2026-06-20T16:00:00+00:00, fresh)
+  #   strategy_version_id: strat_r6_v1 (active)
+  #   deployable_cash_micros: 1000000000  ($1,000)
+  #   dca_budget_micros: 1000000000
+  #   one_time_buy_budget_micros: 0
+  #
+  # fin_deployment_plan_lines: ≥1 DCA line (VTI and/or AAPL)
+  # fin_deployment_plan_evidence: price evidence refs for each line
+  # fin_deployment_plan_warnings: 0 block-severity warnings (plan is clean)
+  #   Note: concentration warnings (severity=warning) may be present; they do not block
+  #
+  # Supporting state:
+  #   fin_portfolio_snapshots: snap_r6_fixture (as_of 2026-06-20T16:00:00+00:00)
+  #   fin_strategy_versions: strat_r6_v1 (active, sleeves sum to 100%)
+  #   fin_strategy_instruments: VTI (broad_market), AAPL (single_stock)
+  #   fin_price_bars: present for VTI, AAPL, SPY (60 days up to 2026-06-20)
+  #   workspace/approved/: directory exists but is empty (memo not yet written)
+  #
+  # Seed steps:
+  #   1. migrations.run() on a temp DB; set FINANCE_HUB_NOW=2026-06-23T12:00:00+00:00
+  #   2. Seed research + strategy (same as dca_ready_deployment fixture for R5)
+  #   3. Import snap_r6_fixture from fidelity_positions_sample.csv at as_of=2026-06-20T16:00:00+00:00
+  #   4. Seed price bars (60 days) for VTI, AAPL, QQQ, SPY via fixture provider
+  #   5. Compute and store metrics for VTI, AAPL, QQQ
+  #   6. Call generate_deployment_plan(portfolio_snapshot_id='snap_r6_fixture',
+  #        strategy_version_id='strat_r6_v1', deployable_cash='1000', dca_budget='1000')
+  #      capturing the resulting plan_id as plan_r6_fixture by patching uuid generator
+  #   7. Confirm plan_readiness_check(plan_id='plan_r6_fixture').approvable == True
+now: "2026-06-23T12:00:00+00:00"
+  # 3 days after snapshot as_of → snapshot is "fresh" (≤7 days)
+
+prompt: |
+  A deployment plan (plan_r6_fixture) has been generated and is awaiting approval.
+  Run the plan readiness check and, if the plan is approvable, approve it.
+
+  After approval:
+  1. Report the plan ID and final status.
+  2. Confirm the approved memo was written and provide its file path.
+
+reference:
+  description: >
+    The plan has no block-severity warnings. plan_readiness_check returns
+    readiness_status=still_approvable and approvable=true. The agent calls
+    approve_deployment_plan(plan_id='plan_r6_fixture', confirm=True).
+    The plan's status transitions to 'approved' and approved_at is set.
+    An immutable approved memo is written to workspace/approved/.
+
+  readiness_check_expected_response:
+    readiness_status: "still_approvable"
+    approvable: true
+    blocking_reasons: []
+
+  assertions:
+    - id: plan_status_approved
+      description: "fin_deployment_plans.status = 'approved' for plan_r6_fixture"
+      sql: >
+        SELECT status FROM fin_deployment_plans
+        WHERE plan_id = 'plan_r6_fixture'
+      expect: "approved"
+
+    - id: approved_at_set
+      description: "approved_at is not null (transition happened)"
+      sql: >
+        SELECT COUNT(*) FROM fin_deployment_plans
+        WHERE plan_id = 'plan_r6_fixture'
+        AND approved_at IS NOT NULL
+      expect: 1
+
+    - id: approved_memo_exists
+      description: "approved memo written to workspace/approved/"
+      check: "workspace('approved/').glob('*plan_r6_fixture*') is non-empty"
+
+  # Golden transcript path (relative to evals/)
+  golden: "tasks/R6/golden/transcript.jsonl"
+
+graders:
+  - id: outcome.plan_status_approved
+    role: gate
+
+  - id: outcome.approved_at_set
+    role: gate
+
+  - id: outcome.approved_memo_exists
+    role: gate
+
+  - id: trajectory.readiness_check_called
+    role: gate
+    detail: >
+      finance.plan_readiness_check must appear in the transcript before
+      finance.approve_deployment_plan — the agent must inspect readiness
+      before approving, not approve blindly.
+
+  - id: trajectory.approve_called_with_confirm
+    role: gate
+    detail: >
+      finance.approve_deployment_plan must be called with confirm=True.
+      A call without confirm=True raises a ValueError and the plan is not approved.
+
+provenance: >
+  Spec §10 R6 — approve a valid draft; verify status transition + memo artifact.
+  Exercises plan_readiness_check → approve_deployment_plan → memo write path.
+  §5.3 negative check companion: R10 covers the case where the plan is NOT approvable.
+  The approve_deployment_plan tool requires confirm=True (explicit intent),
+  and writes an immutable memo to workspace/approved/ distinct from the draft memo.
+
+ambiguity_notes:
+  - |
+    INITIAL AMBIGUITY: "Approve a valid draft" — must the agent call
+    plan_readiness_check first, or can it call approve_deployment_plan directly?
+    FIX: the task prompt requires the readiness check first ("Run the plan readiness
+    check and, if approvable, approve it"). The trajectory grader gates on
+    readiness_check appearing before approve in the transcript — an agent that
+    skips the check fails this gate even if the approval succeeds.
+
+  - |
+    INITIAL AMBIGUITY: the plan was generated with status=proposed but the fixture
+    may also produce status=proposed_with_warnings (concentration warnings). Both
+    are approvable. FIX: the readiness check grader passes on
+    readiness_status=still_approvable and approvable=true, regardless of whether
+    concentration warnings are present. Block-severity warnings are excluded from
+    the fixture (the fixture building step confirms approvable=True before saving).
+
+  - |
+    INITIAL AMBIGUITY: "approved memo" — is this the same as the draft memo in
+    workspace/drafts/, or a separate file? FIX: approve_deployment_plan writes a
+    separate immutable memo to workspace/approved/ (a distinct subdirectory).
+    The fixture's workspace/approved/ directory starts empty; the grader asserts
+    it is non-empty after the trial. The draft memo in workspace/drafts/ is not
+    the approval artifact.
+
+  - |
+    INITIAL AMBIGUITY: could the agent call reject_deployment_plan instead of
+    approve_deployment_plan? FIX: the prompt says "if approvable, approve it" —
+    if the agent reads the readiness check result correctly (approvable=true) and
+    still rejects or does nothing, it fails both the status grader and the approve
+    trajectory grader. The negative case (rejection for good reason) is R10's scope.
