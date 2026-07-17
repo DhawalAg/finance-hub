@@ -85,10 +85,9 @@ def _run_sql_grader(spec: dict, db_path: Path) -> GraderResult:
 
     if isinstance(expected, list):
         actual: Any = [row[0] for row in rows]
-        passed = actual == expected
     else:
         actual = rows[0][0] if rows else None
-        passed = actual == expected
+    passed = actual == expected
 
     return GraderResult(gid, role, "pass" if passed else "fail", detail, actual=actual)
 
