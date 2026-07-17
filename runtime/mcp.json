@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "finance-hub": {
+      "command": "finance-mcp"
+    }
+  }
+}
