@@ -7,12 +7,18 @@ Spec: [`docs/requests/evals/spec.md`](../docs/requests/evals/spec.md)
 ```
 evals/
   tasks/              # Task definitions (one YAML per task; per-task golden/ subdir)
-    R1.yaml
-    R1/golden/        # Witnessed-run transcripts (§8.3)
-    R3.yaml
-    R5.yaml
-    R7.yaml
-    R10.yaml
+    R1.yaml           R1/golden/
+    R2.yaml           R2/golden/
+    R3.yaml           R3/golden/
+    R4.yaml           R4/golden/
+    R5.yaml           R5/golden/
+    R6.yaml           R6/golden/
+    R7.yaml           R7/golden/
+    R8.yaml           R8/golden/
+    R9.yaml           R9/golden/
+    R10.yaml          R10/golden/
+    R11.yaml          R11/golden/
+    R12.yaml          R12/golden/
   fixtures/           # Fixture build scripts (scripts only; materialized DBs are .gitignored)
   rubrics/            # Versioned LLM-judge rubrics (§6.3)
   harness/            # Runner, grader registry, report (Phase 1 — not yet)
@@ -23,7 +29,7 @@ evals/
 
 | Phase | Description | Status |
 |---|---|---|
-| 0 | Task collection (no code) | In progress — see below |
+| 0 | Task collection (no code) | Complete — all 12 regression tasks authored |
 | 1 | Harness MVP (R1 end-to-end) | Not started |
 | 2 | Trajectory + breadth | Not started |
 | 3 | Judge + calibration | Not started |
@@ -34,12 +40,20 @@ evals/
 | ID | Suite | Workflow | Status |
 |---|---|---|---|
 | R1 | regression | planning | Full (prompt + reference + golden run) |
-| R3 | regression | research | Prompt + reference + judge-grader config |
-| R5 | regression | planning | Prompt + reference |
-| R7 | regression | chain | Prompt + reference |
-| R10 | regression | planning | Prompt + reference |
+| R2 | regression | research | Full (prompt + reference + golden run) |
+| R3 | regression | research | Full (prompt + reference + judge config + golden run) |
+| R4 | regression | strategy | Full (prompt + reference + golden run) |
+| R5 | regression | planning | Full (prompt + reference + golden run) |
+| R6 | regression | planning | Full (prompt + reference + golden run) |
+| R7 | regression | chain | Full (prompt + reference + golden run) |
+| R8 | regression | planning (negative) | Full (prompt + reference + golden run) |
+| R9 | regression | planning (negative) | Full (prompt + reference + golden run) |
+| R10 | regression | planning (negative) | Full (prompt + reference + golden run) |
+| R11 | regression | research (negative) | Full (prompt + reference + golden run) |
+| R12 | regression | research (negative) | Full (prompt + reference + golden run) |
 
-Golden runs for R3, R5, R7, R10 are deferred to bulk-authoring (#42).
+All 12 regression tasks from spec §10 are authored. Each has: prompt, reference solution,
+manual golden-run transcript, and ambiguity notes. Phase 0 complete.
 
 ## Fixtures
 
@@ -49,10 +63,17 @@ script that runs real migrations and real tools against a temp DB — never hand
 
 Fixture names authored in Phase 0:
 - `fidelity_sample_csv` — for R1: empty migrated DB + sample CSV file
-- `dca_ready_deployment` — for R5: portfolio snapshot + active strategy + price bars
-- `chain_quickstart` — for R7: minimal state for the full chain (no snapshot yet)
+- `dividend_growth_empty` — for R2: empty DB (all state created by agent)
 - `instrument_candidate_aapl` — for R3: AAPL registered as candidate, empty thesis
+- `approved_candidates_ready_for_promotion` — for R4: 3 approved research candidates
+- `dca_ready_deployment` — for R5: portfolio snapshot + active strategy + price bars
+- `proposed_plan_ready_for_approval` — for R6: proposed plan (no block warnings)
+- `chain_quickstart` — for R7: minimal state for full chain (no snapshot, no strategy)
+- `plan_ready_no_price_data` — for R8: strategy + snapshot, NO price bars in fin_price_bars
+- `stale_portfolio_snapshot` — for R9: 20-day-old snapshot (stale band), with fresh prices
 - `plan_with_block_warning` — for R10: plan with block-severity UNKNOWN_SLEEVE_EXPOSURE
+- `theme_with_candidate_msft` — for R11: theme + MSFT as candidate (not yet reviewed)
+- `active_strategy_with_research_candidates` — for R12: active strategy (VTI only) + research theme
 
 ## Task Format
 

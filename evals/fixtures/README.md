@@ -93,3 +93,125 @@ The chain begins with CSV import.
 
 **Verification**: after seeding, assert that `finance.plan_readiness_check(plan_id='plan_r10_fixture')`
 returns `approvable=false` and `readiness_status='approval_blocked'`.
+
+---
+
+### `dividend_growth_empty` (used by R2)
+
+**What it contains**: an empty, freshly-migrated DB. No themes or instruments pre-seeded —
+all research state is created by the agent during the trial.
+
+**Seed steps**:
+1. `migrations.run()` on a temp DB.
+Set `FINANCE_HUB_DB`, `FINANCE_HUB_WORKSPACE`, and `FINANCE_HUB_NOW=2026-07-01T12:00:00+00:00`.
+
+---
+
+### `approved_candidates_ready_for_promotion` (used by R4)
+
+**What it contains**: three approved research candidates (VTI, QQQ, AAPL) in theme_r4,
+ready to be promoted. No strategy version exists yet.
+
+**Seed steps**:
+1. `migrations.run()` on a temp DB; set `FINANCE_HUB_NOW=2026-07-01T12:00:00+00:00`.
+2. `finance.set_theme(key='theme_r4', display_name='Core Equities', status='watching')`.
+3. `finance.map_instruments(theme_key='theme_r4', instruments=[VTI (etf/broad_market_etf),
+   QQQ (etf/broad_market_etf), AAPL (stock/single_stock)])`.
+4. `finance.review_instrument` × 3 — approve all with conviction + note:
+   - VTI: conviction 5, note "Total market at lowest cost — essential DCA backbone"
+   - QQQ: conviction 3, note "Acceptable tech tilt; diversification at 30% of broad sleeve"
+   - AAPL: conviction 3, note "Services growth offsets hardware saturation risk"
+5. `finance.set_research_note(scope='instrument', key='AAPL', body='# AAPL Thesis\n...')` —
+   stub thesis required for single_stock at plan generation time.
+(NO strategy version — promotion is the action under test.)
+
+---
+
+### `proposed_plan_ready_for_approval` (used by R6)
+
+**What it contains**: a proposed deployment plan (plan_r6_fixture) with no block warnings,
+ready to be approved. This is structurally identical to `dca_ready_deployment` (R5) plus
+a generated plan.
+
+**Seed steps** (extend `dca_ready_deployment` seed):
+1–10. Same as `dca_ready_deployment` (using strat_r6_v1 and snap_r6_fixture as IDs).
+11. `finance.generate_deployment_plan(portfolio_snapshot_id='snap_r6_fixture',
+    strategy_version_id='strat_r6_v1', deployable_cash='1000', dca_budget='1000')`,
+    patching UUID generator to produce `plan_r6_fixture`.
+12. `finance.plan_readiness_check(plan_id='plan_r6_fixture')` — assert `approvable=True`
+    before saving the fixture.
+(workspace/approved/ must be empty — the approval is the action under test.)
+
+---
+
+### `plan_ready_no_price_data` (used by R8)
+
+**What it contains**: a strategy and portfolio snapshot, but NO price bars in fin_price_bars.
+Simulates the price provider being unavailable at plan-generation time.
+
+**Seed steps**:
+1. `migrations.run()` on a temp DB; set `FINANCE_HUB_NOW=2026-06-23T12:00:00+00:00`.
+2. Set up research: `finance.set_theme(key='theme_r8', ...)`.
+   `finance.map_instruments` for VTI (etf/broad_market_etf) and AAPL (stock/single_stock).
+   Approve both with conviction + note.
+   `finance.set_research_note` for AAPL; link ≥2 sources.
+3. `finance.promote_to_strategy(version_id='strat_r8_v1', sleeves=[broad_market 70%, single_stock 30%],
+   instruments=[VTI→broad_market, AAPL→single_stock], confirm=True)`.
+4. `finance.activate_strategy(version_id='strat_r8_v1', confirm=True)`.
+5. Import `snap_r8_fixture` from fidelity_positions_sample.csv at `as_of='2026-06-20T16:00:00+00:00'`.
+6. **Do NOT call `snapshot()` or insert any price bars.** fin_price_bars must remain empty.
+7. Verify: `prices(['VTI', 'AAPL'])` raises PriceFetchError (confirms no bars stored).
+
+---
+
+### `stale_portfolio_snapshot` (used by R9)
+
+**What it contains**: a fully-seeded DB with a portfolio snapshot that is 20 days old
+relative to `FINANCE_HUB_NOW=2026-07-10T12:00:00+00:00`. Falls in the "stale" band (15-30 days).
+Price bars and metrics are up-to-date (seeded up to 2026-07-10).
+
+**Seed steps**:
+1. `migrations.run()` on a temp DB; set `FINANCE_HUB_NOW=2026-07-10T12:00:00+00:00`.
+2. Set up research + strategy (VTI, QQQ, AAPL; same pattern as `dca_ready_deployment`),
+   using strat_r9_v1 and theme_r9 as IDs.
+3. Import `snap_r9_fixture` from fidelity_positions_sample.csv at
+   `as_of='2026-06-20T16:00:00+00:00'` (20 days before now).
+4. Seed 60 days of price bars up to 2026-07-10 for VTI, AAPL, QQQ, SPY via fixture provider.
+5. Compute and store metrics for VTI, AAPL, QQQ.
+6. Verify: `validate_snapshot_freshness(snapshot_as_of='2026-06-20T16:00:00+00:00',
+   as_of='2026-07-10')` returns `band='stale'`, `days_old=20`.
+
+---
+
+### `theme_with_candidate_msft` (used by R11)
+
+**What it contains**: a theme (theme_r11) with MSFT as a candidate instrument not yet reviewed.
+
+**Seed steps**:
+1. `migrations.run()` on a temp DB; set `FINANCE_HUB_NOW=2026-07-01T12:00:00+00:00`.
+2. `finance.set_theme(key='theme_r11', display_name='Cloud Growth', status='watching')`.
+3. `finance.map_instruments(theme_key='theme_r11', instruments=[
+     {'ticker': 'MSFT', 'type': 'stock', 'instrument_role': 'single_stock',
+      'display_name': 'Microsoft Corp'}
+   ])`.
+(No conviction, no review yet — MSFT is status=candidate.)
+
+---
+
+### `active_strategy_with_research_candidates` (used by R12)
+
+**What it contains**: an active strategy with VTI only, plus a research theme (theme_r12_core)
+with VTI already approved. The agent will add NVDA as a new research candidate.
+
+**Seed steps**:
+1. `migrations.run()` on a temp DB; set `FINANCE_HUB_NOW=2026-07-01T12:00:00+00:00`.
+2. `finance.set_theme(key='theme_r12_core', display_name='Core Holdings', status='watching')`.
+3. `finance.map_instruments(theme_key='theme_r12_core', instruments=[VTI (etf/broad_market_etf)])`.
+4. `finance.review_instrument(theme_key='theme_r12_core', ticker='VTI', status='approved',
+   rationale='Core holding', conviction=5, conviction_note='Total market at lowest cost')`.
+5. `finance.promote_to_strategy(version_id='strat_r12_v1', label='Established Core',
+   sleeves=[{sleeve_key='broad_market', target_weight_pct=100}],
+   instruments=[{ticker='VTI', primary_sleeve_key='broad_market', source_theme_key='theme_r12_core'}],
+   confirm=True)`.
+6. `finance.activate_strategy(version_id='strat_r12_v1', confirm=True)`.
+**Verify**: fin_strategy_instruments has exactly 1 row (VTI); NVDA is NOT mapped yet.

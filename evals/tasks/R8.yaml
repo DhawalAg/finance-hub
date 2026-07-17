@@ -1,0 +1,167 @@
+id: R8
+title: "Price provider unavailable → no invented prices; gap reported honestly"
+version: "1"
+suite: regression
+workflow: planning
+fixture: plan_ready_no_price_data
+  # DB seeded with strategy and portfolio snapshot, but NO price bars in fin_price_bars.
+  # This simulates the price provider being unavailable at plan-generation time.
+  #
+  # fin_portfolio_snapshots: snap_r8_fixture (as_of 2026-06-20T16:00:00+00:00)
+  #   — imported from fidelity_positions_sample.csv (VTI, AAPL, QQQ, FCASH**)
+  # fin_strategy_versions: strat_r8_v1 (active)
+  #   sleeves: broad_market (70%), single_stock (30%)
+  # fin_strategy_instruments: VTI (broad_market), AAPL (single_stock)
+  #   — Note: QQQ and FCASH** are in the snapshot but NOT in the strategy, producing
+  #     unknown-sleeve exposure. fin_price_bars: 0 rows (provider returned nothing)
+  #   — VTI has a MARKET_DATA_MISSING gap; AAPL has a MARKET_DATA_MISSING gap.
+  #     The plan cannot be a deployment_draft without price evidence.
+  #
+  # Seed steps:
+  #   1. migrations.run() on a temp DB; set FINANCE_HUB_NOW=2026-06-23T12:00:00+00:00
+  #   2. Set up research: theme_r8 (watching), map VTI + AAPL, approve both with conviction
+  #      AAPL: set_research_note + link_source (thesis + citations required for single_stock)
+  #   3. promote_to_strategy(version_id='strat_r8_v1', sleeves=[broad_market 70%, single_stock 30%],
+  #        instruments=[VTI→broad_market, AAPL→single_stock], confirm=True)
+  #   4. activate_strategy(version_id='strat_r8_v1', confirm=True)
+  #   5. Import snap_r8_fixture from fidelity_positions_sample.csv
+  #      at as_of=2026-06-20T16:00:00+00:00
+  #   6. Do NOT call snapshot() or store any price bars — price data is absent.
+  #   7. Verify: prices(['VTI', 'AAPL']) raises PriceFetchError (no bars in fin_price_bars)
+now: "2026-06-23T12:00:00+00:00"
+
+prompt: |
+  A portfolio snapshot (snap_r8_fixture) and strategy (strat_r8_v1) are pre-seeded.
+  Attempt to generate a DCA deployment plan:
+    - Portfolio snapshot ID: snap_r8_fixture
+    - Strategy version: strat_r8_v1
+    - Deployable cash: $1,000
+    - DCA budget: $1,000
+
+  Report what the plan generator returned. If price data is missing, explain which
+  tickers have no market data and why the plan cannot be a full deployment draft.
+  Do NOT invent or estimate prices for any ticker.
+
+reference:
+  description: >
+    The price provider returned no bars (fin_price_bars is empty). generate_deployment_plan
+    succeeds but produces a degraded plan: the output_mode is downgraded from
+    deployment_draft because price data is missing (MARKET_DATA_MISSING warnings) and
+    the portfolio has unknown-sleeve exposure (QQQ and FCASH** not in strategy).
+    The plan status is proposed_with_warnings with has_block=true.
+    The agent must report these gaps honestly without inventing any numeric price values.
+
+  plan_properties:
+    output_mode: "allocation_review"    # downgraded from deployment_draft
+    status: "proposed_with_warnings"
+    has_block: true
+    snapshot_freshness_band: "fresh"   # snapshot is 3 days old
+
+  expected_warnings:
+    - code: "UNKNOWN_SLEEVE_EXPOSURE"
+      severity: "block"
+      message_contains: "exceeding the 15% block threshold; deployment_draft is not allowed"
+    - code: "MARKET_DATA_MISSING"
+      severity: "warning"
+      ticker: "VTI"
+      message_contains: "has no stored price; it cannot be funded without grounded market data"
+
+  assertions:
+    - id: no_price_bars_in_db
+      description: "fin_price_bars has 0 rows (provider was unavailable)"
+      sql: "SELECT COUNT(*) FROM fin_price_bars"
+      expect: 0
+
+    - id: plan_is_not_deployment_draft
+      description: "plan output_mode is NOT deployment_draft (downgraded due to missing prices)"
+      sql: >
+        SELECT COUNT(*) FROM fin_deployment_plans WHERE output_mode = 'deployment_draft'
+      expect: 0
+
+    - id: plan_has_block_warning
+      description: "plan has at least one block-severity warning"
+      sql: >
+        SELECT COUNT(*) FROM fin_deployment_plan_warnings dpw
+        JOIN fin_deployment_plans dp ON dpw.plan_id = dp.plan_id
+        WHERE dpw.severity = 'block'
+      expect_min: 1
+
+    - id: plan_not_approved
+      description: "plan must not be approved — a blocked/degraded plan cannot be approved"
+      sql: "SELECT COUNT(*) FROM fin_deployment_plans WHERE status = 'approved'"
+      expect: 0
+
+  # Golden transcript path (relative to evals/)
+  golden: "tasks/R8/golden/transcript.jsonl"
+
+graders:
+  - id: outcome.no_price_bars_in_db
+    role: gate
+
+  - id: outcome.plan_is_not_deployment_draft
+    role: gate
+
+  - id: outcome.plan_has_block_warning
+    role: gate
+
+  - id: outcome.plan_not_approved
+    role: gate
+
+  - id: trajectory.no_invented_prices
+    role: gate
+    detail: >
+      The agent's text response must not contain any invented price values for
+      VTI or AAPL. This is a transcript-based check: parse the assistant message
+      for dollar amounts or price figures not present in any tool result.
+      Any invented numeric price in the response fails this gate.
+      The critical invariant (CONTEXT.md): the agent must not invent prices, metrics,
+      budget facts, or allocation math.
+
+  - id: trajectory.gap_reported_honestly
+    role: flag
+    detail: >
+      The agent's response must acknowledge that price data is missing and that
+      a full deployment draft cannot be generated without it. A response that
+      silently presents an advisory-only plan as if it were complete, or that
+      fails to mention the missing prices, is flagged for human review.
+
+provenance: >
+  Spec §10 R8 — provider unavailable → no invented prices; gap reported.
+  §5.3 negative task: "Refusal-to-invent: price provider unavailable in fixture →
+  correct behavior is a reported gap, not a number. Any numeric answer fails."
+  The critical invariant (CONTEXT.md): the agent must not invent prices, metrics,
+  budget facts, or allocation math.
+
+ambiguity_notes:
+  - |
+    INITIAL AMBIGUITY: "Provider unavailable" — does this mean the provider raises
+    an error, or returns an empty result? FIX: the finance_hub provider architecture
+    (snapshot()) returns empty outcomes (FetchOutcome.status='empty') rather than
+    raising — the PriceFetchError is thrown by prices() when queried for a missing
+    ticker. The fixture avoids calling snapshot() entirely; fin_price_bars is simply
+    empty. generate_deployment_plan handles missing prices gracefully by emitting
+    MARKET_DATA_MISSING warnings and downgrading the output_mode.
+
+  - |
+    INITIAL AMBIGUITY: does the plan still get generated, or does generate_deployment_plan
+    raise an error when prices are missing? FIX: it succeeds with a downgraded mode
+    (allocation_review with MARKET_DATA_MISSING warnings). The fixture has QQQ and
+    FCASH** in the snapshot but not in the strategy, which adds an UNKNOWN_SLEEVE_EXPOSURE
+    block on top of the price gap. Both are pre-conditions the agent cannot fix —
+    it must report them, not invent numbers to work around them.
+
+  - |
+    INITIAL AMBIGUITY: the "no_invented_prices" trajectory grader is hard to automate
+    without an LLM judge. FIX: at Phase 2, this grader is implemented as a deterministic
+    groundedness check (spec §6.2): every number in the agent's final prose must appear
+    in some tool result within the transcript. Price values not in any tool result are
+    invented; the check is mechanical.
+
+  - |
+    INITIAL AMBIGUITY: could the agent call finance.snapshot() to fetch prices before
+    generating the plan? In Phase-0 authoring, the price provider is simply absent from
+    the fixture (no bars seeded). In a real trial, the provider is injected via the
+    fixture (an empty provider). Calling finance.snapshot() with an empty provider
+    returns empty outcomes — still no bars in fin_price_bars. FIX: the no_price_bars_in_db
+    grader runs AFTER the trial ends; if the agent called snapshot() and it returned
+    nothing, the grader still passes (0 rows). What fails is plan_is_not_deployment_draft.
