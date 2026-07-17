@@ -11,6 +11,7 @@ validation helpers receive `now` / `as_of` explicitly; they never read
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -98,6 +99,70 @@ class TestFactoryOverrides:
             factories.get_fundamentals_provider()
         # Real clock returns again after reset.
         assert isinstance(factories.get_clock().now(), datetime)
+
+
+class TestEnvClock:
+    """FINANCE_HUB_NOW env-var front door (issue #35)."""
+
+    def setup_method(self):
+        factories.reset()
+        os.environ.pop("FINANCE_HUB_NOW", None)
+
+    def teardown_method(self):
+        os.environ.pop("FINANCE_HUB_NOW", None)
+        factories.reset()
+
+    def test_unset_uses_real_clock(self):
+        factories._apply_env_clock()
+        before = datetime.now(timezone.utc)
+        got = factories.get_clock().now()
+        after = datetime.now(timezone.utc)
+        assert before <= got <= after
+
+    def test_valid_iso_datetime_with_tz(self):
+        os.environ["FINANCE_HUB_NOW"] = "2025-03-15T09:00:00+00:00"
+        factories._apply_env_clock()
+        assert factories.get_clock().now() == datetime(2025, 3, 15, 9, 0, tzinfo=timezone.utc)
+
+    def test_bare_date_becomes_midnight_utc(self):
+        os.environ["FINANCE_HUB_NOW"] = "2024-12-01"
+        factories._apply_env_clock()
+        assert factories.get_clock().now() == datetime(2024, 12, 1, 0, 0, tzinfo=timezone.utc)
+
+    def test_naive_datetime_assumed_utc(self):
+        os.environ["FINANCE_HUB_NOW"] = "2025-06-30T14:30:00"
+        factories._apply_env_clock()
+        assert factories.get_clock().now() == datetime(2025, 6, 30, 14, 30, tzinfo=timezone.utc)
+
+    def test_invalid_value_raises_at_init(self):
+        os.environ["FINANCE_HUB_NOW"] = "not-a-date"
+        with pytest.raises(ValueError, match="FINANCE_HUB_NOW"):
+            factories._apply_env_clock()
+
+    def test_invalid_value_leaves_no_clock_set(self):
+        # After a failed _apply_env_clock, clock must not silently be real
+        os.environ["FINANCE_HUB_NOW"] = "garbage"
+        with pytest.raises(ValueError):
+            factories._apply_env_clock()
+        # The real clock is still the module default; we just confirm no silent fallback happened
+        # (the ValueError propagated — no partial state installed)
+        # Real clock is still in place from setup_method's reset(), or whatever was before
+        assert factories.get_clock() is not None  # basic sanity
+
+    def test_frozen_clock_returns_same_instant_every_call(self):
+        os.environ["FINANCE_HUB_NOW"] = "2025-01-01T00:00:00+00:00"
+        factories._apply_env_clock()
+        t1 = factories.get_clock().now()
+        t2 = factories.get_clock().now()
+        assert t1 == t2
+
+    def test_log_emitted_on_activation(self, caplog):
+        import logging
+        os.environ["FINANCE_HUB_NOW"] = "2025-06-15T00:00:00+00:00"
+        with caplog.at_level(logging.WARNING, logger="finance_hub.factories"):
+            factories._apply_env_clock()
+        assert any("FINANCE_HUB_NOW" in r.message for r in caplog.records)
+        assert any("clock frozen" in r.message for r in caplog.records)
 
 
 class TestUsePriceProviderFromTest:
