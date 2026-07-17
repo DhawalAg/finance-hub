@@ -21,6 +21,7 @@ analysis = [
 dev = [
     "pytest>=8",
     "claude-agent-sdk>=0.2.121",
+    "pyyaml>=6",
 ]
 
 [project.scripts]
