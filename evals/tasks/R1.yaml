@@ -1,0 +1,180 @@
+id: R1
+title: "CSV import: Fidelity sample → snapshot rows + as_of extraction"
+version: "1"
+suite: regression
+workflow: planning
+fixture: fidelity_sample_csv
+  # Empty freshly-migrated DB + the sample CSV placed at fixture/fidelity_sample.csv
+  # in the trial dir. CSV rows: VTI (25 sh, $242.10), AAPL (10 sh, $190.50),
+  # QQQ (5 sh, $480.20), FCASH** ($1,234.56 cash), one "Pending activity" row.
+  # Footer: "Date downloaded Jun-22-2026 10:30 a.m. ET"
+now: "2026-06-23T12:00:00+00:00"
+  # Day after the CSV's download timestamp; as_of will be in the past vs. now.
+
+prompt: |
+  The file at fixture/fidelity_sample.csv is a Fidelity brokerage portfolio export.
+  Import it into the finance store and report:
+  1. The snapshot ID assigned to this import.
+  2. The as_of timestamp — it must be extracted from the CSV's "Date downloaded" line,
+     not set to the current time.
+  3. Which positions were stored: supported equity tickers, cash holdings, and how
+     many rows were skipped.
+
+reference:
+  description: >
+    The tool auto-extracts as_of from the CSV footer and writes one snapshot row
+    plus four position rows. Three equity positions (VTI, AAPL, QQQ) are marked
+    supported; FCASH** is a cash position (unsupported for equity allocation);
+    the Pending activity row is skipped entirely.
+
+  # fin_portfolio_snapshots: exactly 1 row
+  snapshot:
+    as_of: "2026-06-22T10:30:00-04:00"
+    source_adapter: "fidelity_csv"
+    source_file: "fixture/fidelity_sample.csv"
+
+  # fin_portfolio_positions: exactly 4 rows (Pending activity row is NOT stored)
+  positions:
+    count: 4
+    rows:
+      - ticker: "VTI"
+        name: "Vanguard Total Stock Market ETF"
+        asset_type: "etf"
+        account_name: "Individual Brokerage"
+        account_type: "brokerage"
+        account_registration: "cash"
+        quantity: "25"
+        market_value_micros: 6052500000    # $6,052.50
+        cost_basis_micros: 4800000000      # $4,800.00
+        cash_value_micros: null
+        is_supported: 1
+
+      - ticker: "AAPL"
+        name: "Apple Inc"
+        asset_type: "stock"
+        account_name: "Individual Brokerage"
+        account_type: "brokerage"
+        account_registration: "cash"
+        quantity: "10"
+        market_value_micros: 1905000000    # $1,905.00
+        cost_basis_micros: 1500000000      # $1,500.00
+        cash_value_micros: null
+        is_supported: 1
+
+      - ticker: "QQQ"
+        name: "Invesco QQQ Trust ETF"
+        asset_type: "etf"
+        account_name: "Rollover IRA"
+        account_type: "ira"
+        account_registration: "margin"
+        quantity: "5"
+        market_value_micros: 2401000000    # $2,401.00
+        cost_basis_micros: 2000000000      # $2,000.00
+        cash_value_micros: null
+        is_supported: 1
+
+      - ticker: "FCASH**"
+        name: "HELD IN FCASH"
+        asset_type: "cash"
+        account_name: "Individual Brokerage"
+        account_type: "brokerage"
+        account_registration: "cash"
+        quantity: "1,234.56"
+        market_value_micros: null
+        cost_basis_micros: null
+        cash_value_micros: 1234560000      # $1,234.56
+        is_supported: 0
+
+  # Expected finance.import_portfolio_csv tool response
+  tool_response:
+    as_of_source: "csv_download_timestamp"
+    buckets:
+      supported:
+        count: 3
+        tickers: ["AAPL", "QQQ", "VTI"]
+      cash:
+        count: 1
+        tickers: ["FCASH**"]
+      unsupported:
+        count: 0
+        tickers: []
+      skipped:
+        count: 1
+        tickers: []   # skipped tickers list is not populated by the tool
+
+  # Golden transcript path (relative to evals/)
+  golden: "tasks/R1/golden/transcript.jsonl"
+
+graders:
+  - id: outcome.snapshot_row_exists
+    role: gate
+    detail: "fin_portfolio_snapshots has exactly 1 row with the correct as_of and source_adapter"
+    sql: >
+      SELECT COUNT(*) FROM fin_portfolio_snapshots
+      WHERE as_of = '2026-06-22T10:30:00-04:00'
+      AND source_adapter = 'fidelity_csv'
+    expect: 1
+
+  - id: outcome.position_count
+    role: gate
+    detail: "exactly 4 position rows stored (Pending activity row must not appear)"
+    sql: >
+      SELECT COUNT(*) FROM fin_portfolio_positions
+      WHERE snapshot_id = (SELECT snapshot_id FROM fin_portfolio_snapshots LIMIT 1)
+    expect: 4
+
+  - id: outcome.supported_tickers
+    role: gate
+    detail: "supported tickers are AAPL, QQQ, VTI — sorted, no extras"
+    sql: >
+      SELECT ticker FROM fin_portfolio_positions
+      WHERE is_supported = 1
+      ORDER BY ticker
+    expect: ["AAPL", "QQQ", "VTI"]
+
+  - id: outcome.cash_position_stored
+    role: gate
+    detail: "FCASH** stored as cash asset_type with is_supported=0 and cash_value_micros populated"
+    sql: >
+      SELECT COUNT(*) FROM fin_portfolio_positions
+      WHERE ticker = 'FCASH**'
+      AND asset_type = 'cash'
+      AND is_supported = 0
+      AND cash_value_micros = 1234560000
+    expect: 1
+
+  - id: outcome.as_of_source_is_csv
+    role: gate
+    detail: "tool response must report as_of_source = csv_download_timestamp, not explicit_override"
+    check: "tool_result('finance.import_portfolio_csv').as_of_source == 'csv_download_timestamp'"
+
+provenance: >
+  Source fixture: tests/fixtures/fidelity_positions_sample.csv (sanitised real-shape sample).
+  Spec §10 R1 — thinnest complete planning path; MVP seam-prover.
+  Golden run performed manually 2026-07-17 against the current tool layer.
+
+ambiguity_notes:
+  - |
+    INITIAL AMBIGUITY: "Import the CSV" did not specify that as_of must be auto-extracted
+    from the CSV footer rather than set to now. The tool raises if no "Date downloaded"
+    line exists and no explicit as_of is passed — but the original sketch left this
+    implicit. FIX: prompt explicitly instructs the agent to extract as_of from the CSV
+    itself and the grader checks as_of_source == 'csv_download_timestamp'.
+
+  - |
+    INITIAL AMBIGUITY: snapshot_id is a uuid-derived non-deterministic value; graders
+    cannot hard-code it. FIX: graders use (as_of, source_adapter) as the stable key,
+    and position graders join on the snapshot they find rather than a hard-coded ID.
+
+  - |
+    INITIAL AMBIGUITY: the "Pending activity" row — does it appear in positions with a
+    null ticker, or is it absent entirely? Running the tool against the fixture confirmed
+    the adapter skips it entirely (4 rows in fin_portfolio_positions, not 5).
+    FIX: grader asserts COUNT(*) = 4.
+
+  - |
+    INITIAL AMBIGUITY: FCASH** — is it "unsupported" or "cash"? The adapter stores it
+    as asset_type='cash', is_supported=0, with its value in cash_value_micros (not
+    market_value_micros). The tool's "cash" bucket correctly contains FCASH**; the
+    "unsupported" bucket is empty. Grader checks cash_value_micros = 1234560000 to
+    confirm the correct column was populated.

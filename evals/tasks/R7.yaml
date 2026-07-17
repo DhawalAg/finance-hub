@@ -1,0 +1,225 @@
+id: R7
+title: "Full CSV → approved-plan chain (README quickstart)"
+version: "1"
+suite: regression
+workflow: chain
+fixture: chain_quickstart
+  # Minimal seeded DB for the full end-to-end chain. Contains:
+  #   - No portfolio snapshots yet (CSV import is step 1 of the chain)
+  #   - fin_instruments: VTI (etf/broad_market_etf), AAPL (stock/single_stock),
+  #     QQQ (etf/broad_market_etf) — no theme attachments yet
+  #   - fin_themes: theme_chain (status=exploring)
+  #   - fin_theme_instruments: VTI/AAPL/QQQ attached to theme_chain with status=candidate
+  #   - fin_research_sources: ≥2 active source links per instrument (pre-seeded)
+  #   - workspace/research/instruments/AAPL.md: thesis note present (pre-seeded)
+  #   - fin_instruments.note_path set for AAPL
+  #   - fin_price_bars: 60 days of bars for VTI, AAPL, QQQ (source=fixture, up to 2026-06-20)
+  #   - fin_metrics: stored metrics pack for VTI, AAPL, QQQ
+  #   CSV file: fixture/fidelity_sample.csv (same content as fidelity_sample_csv fixture)
+  # NOT pre-seeded: strategy version, portfolio snapshot, deployment plan.
+now: "2026-06-23T12:00:00+00:00"
+
+prompt: |
+  Run the full portfolio deployment chain from scratch using the README quickstart workflow:
+
+  Step 1 — Import portfolio: Import the Fidelity CSV at fixture/fidelity_sample.csv.
+  Step 2 — Review candidates: Mark VTI, AAPL, and QQQ as approved in theme_chain.
+    - VTI: approved, conviction 4, note "Core broad-market holding for DCA spine"
+    - QQQ: approved, conviction 3, note "Tech-weighted complement to VTI"
+    - AAPL: approved, conviction 3, note "Quality single-stock allocation"
+  Step 3 — Promote to strategy: Create strategy version "strat_chain_v1" with:
+    - Sleeve "broad_market" (target 70%), instruments: VTI, QQQ
+    - Sleeve "single_stock" (target 30%), instruments: AAPL
+    Activate it.
+  Step 4 — Generate plan: Generate a DCA deployment plan with $1,000 DCA budget
+    (monthly cadence, balanced risk) using the imported snapshot and active strategy.
+  Step 5 — Approve plan: Run the readiness check, then approve the plan if it passes.
+
+  Report the final plan ID and status after approval.
+
+reference:
+  description: >
+    The chain exercises every stage of the DCA workflow end-to-end. The final state
+    has: 1 approved portfolio snapshot, 3 instruments reviewed and approved in theme_chain,
+    1 active strategy version (strat_chain_v1) with VTI+QQQ in broad_market and AAPL in
+    single_stock, 1 approved deployment plan with DCA lines summing ≤ $1,000, and an
+    approved memo artifact in workspace/approved/.
+
+  # Key assertions — one per stage of the chain
+  assertions:
+    - id: snapshot_imported
+      description: "fin_portfolio_snapshots has 1 row; as_of = 2026-06-22T10:30:00-04:00"
+      sql: >
+        SELECT COUNT(*) FROM fin_portfolio_snapshots
+        WHERE as_of = '2026-06-22T10:30:00-04:00'
+      expect: 1
+
+    - id: all_candidates_approved
+      description: "VTI, AAPL, QQQ all have status=approved in fin_theme_instruments for theme_chain"
+      sql: >
+        SELECT COUNT(*) FROM fin_theme_instruments
+        WHERE theme_key = 'theme_chain'
+        AND status = 'approved'
+        AND ticker IN ('VTI', 'AAPL', 'QQQ')
+      expect: 3
+
+    - id: conviction_notes_present
+      description: "all approved instruments have non-empty conviction_note"
+      sql: >
+        SELECT COUNT(*) FROM fin_theme_instruments
+        WHERE theme_key = 'theme_chain'
+        AND status = 'approved'
+        AND (conviction_note IS NULL OR length(trim(conviction_note)) = 0)
+      expect: 0    # zero approved instruments missing a conviction note
+
+    - id: strategy_version_created_by_promotion
+      description: "strat_chain_v1 exists and was created by finance.promote_to_strategy (not hand-crafted SQL)"
+      sql: "SELECT COUNT(*) FROM fin_strategy_versions WHERE version_id = 'strat_chain_v1'"
+      expect: 1
+
+    - id: strategy_is_active
+      description: "strat_chain_v1 has status=active"
+      sql: "SELECT status FROM fin_strategy_versions WHERE version_id = 'strat_chain_v1'"
+      expect: "active"
+
+    - id: strategy_sleeves_sum_to_100
+      description: "sleeve target_weight_bps sum = 10000 (100%)"
+      sql: >
+        SELECT SUM(target_weight_bps) FROM fin_strategy_sleeves
+        WHERE version_id = 'strat_chain_v1'
+      expect: 10000
+
+    - id: plan_exists_and_approved
+      description: "fin_deployment_plans has 1 row with status=approved"
+      sql: "SELECT COUNT(*) FROM fin_deployment_plans WHERE status = 'approved'"
+      expect: 1
+
+    - id: plan_is_buy_only
+      description: "all plan lines are bucket=dca"
+      sql: >
+        SELECT COUNT(*) FROM fin_deployment_plan_lines l
+        JOIN fin_deployment_plans p ON l.plan_id = p.plan_id
+        WHERE p.status = 'approved'
+        AND l.bucket = 'one_time'
+      expect: 0
+
+    - id: lines_within_deployable_cash
+      description: "sum of DCA line amounts ≤ $1,000"
+      sql: >
+        SELECT CASE WHEN SUM(l.amount_micros) <= 1000000000 THEN 1 ELSE 0 END
+        FROM fin_deployment_plan_lines l
+        JOIN fin_deployment_plans p ON l.plan_id = p.plan_id
+        WHERE p.status = 'approved'
+      expect: 1
+
+    - id: every_line_ticker_in_strategy
+      description: "no approved plan line has a ticker outside strat_chain_v1"
+      sql: >
+        SELECT COUNT(*) FROM fin_deployment_plan_lines l
+        JOIN fin_deployment_plans p ON l.plan_id = p.plan_id
+        WHERE p.status = 'approved'
+        AND l.ticker NOT IN (
+          SELECT ticker FROM fin_strategy_instruments
+          WHERE version_id = 'strat_chain_v1'
+        )
+      expect: 0
+
+    - id: evidence_refs_resolve
+      description: "every evidence reference in the approved plan resolves to a real store row"
+      sql: >
+        SELECT COUNT(*) FROM fin_deployment_plan_evidence e
+        JOIN fin_deployment_plans p ON e.plan_id = p.plan_id
+        WHERE p.status = 'approved'
+        AND e.evidence_type = 'price'
+        AND e.ref_key NOT IN (SELECT DISTINCT ticker FROM fin_price_bars)
+      expect: 0
+
+    - id: approved_memo_artifact_exists
+      description: "immutable approved memo written to workspace/approved/"
+      check: "workspace('approved/').glob('*.md') is non-empty"
+
+    - id: plan_approved_at_set
+      description: "fin_deployment_plans.approved_at is not null (not just status text)"
+      sql: >
+        SELECT COUNT(*) FROM fin_deployment_plans
+        WHERE status = 'approved'
+        AND approved_at IS NOT NULL
+      expect: 1
+
+graders:
+  - id: outcome.snapshot_imported
+    role: gate
+  - id: outcome.all_candidates_approved
+    role: gate
+  - id: outcome.conviction_notes_present
+    role: gate
+  - id: outcome.strategy_version_created_by_promotion
+    role: gate
+  - id: outcome.strategy_is_active
+    role: gate
+  - id: outcome.strategy_sleeves_sum_to_100
+    role: gate
+  - id: outcome.plan_exists_and_approved
+    role: gate
+  - id: outcome.plan_is_buy_only
+    role: gate
+  - id: outcome.lines_within_deployable_cash
+    role: gate
+  - id: outcome.every_line_ticker_in_strategy
+    role: gate
+  - id: outcome.evidence_refs_resolve
+    role: gate
+  - id: outcome.approved_memo_artifact_exists
+    role: gate
+  - id: outcome.plan_approved_at_set
+    role: gate
+  - id: trajectory.promotion_tool_used
+    role: flag
+    detail: "finance.promote_to_strategy must appear in the transcript; strategy must not
+             be created by any other mutation path (ADR 0003 boundary)"
+  - id: trajectory.readiness_check_before_approval
+    role: gate
+    detail: "finance.plan_readiness_check must appear in the transcript before
+             finance.approve_deployment_plan — it is the mandatory pre-approval gate"
+  - id: trajectory.turn_count
+    role: track
+
+provenance: >
+  Spec §10 R7 — multi-workflow chain matching the README quickstart.
+  Format-stresser: multi-stage chain with 5 distinct workflow steps; exercises trajectory
+  graders (tool ordering) alongside outcome graders. Golden run deferred to #42.
+
+ambiguity_notes:
+  - |
+    INITIAL AMBIGUITY: "Full CSV→approved-plan chain from the README quickstart" is a
+    prose summary, not a concrete step list. The README describes a 5-stage flow; the
+    prompt above makes each step explicit and specifies exact conviction scores and notes
+    to remove subjectivity about what "reviewed" means.
+
+  - |
+    INITIAL AMBIGUITY: does the chain require running finance.plan_readiness_check before
+    approval, or is calling finance.approve_deployment_plan directly legal? The tool
+    calls plan_readiness_check internally, but the spec (§6.2) says "readiness check
+    called before generation/approval" is a right-tools trajectory criterion.
+    FIX: trajectory.readiness_check_before_approval is a gate (not just track), because
+    skipping the explicit readiness check represents the bad agent behavior this task
+    exists to catch.
+
+  - |
+    INITIAL AMBIGUITY: the fixture seeds price bars and metrics but the agent never
+    explicitly fetches them (they're pre-seeded). Does the chain require calling any
+    market-data tools? No — market-data is out of scope for the R7 chain (C1 covers
+    that capability). FIX: fixture description clarifies that price bars are pre-seeded
+    so the agent can proceed directly to plan generation.
+
+  - |
+    INITIAL AMBIGUITY: "Activate it" (step 3) — does promote_to_strategy create an
+    active version, or does the agent need to call activate_strategy separately?
+    finance.promote_to_strategy accepts status='active' directly. FIX: prompt says
+    "Create strategy version ... Activate it" to allow either path; the grader checks
+    status=active in fin_strategy_versions, not how it got there.
+
+  - |
+    INITIAL AMBIGUITY: "Report the final plan ID and status" — is this a grader check?
+    No — it confirms the agent inspected the outcome rather than just submitting calls.
+    The statement is in the prompt for agentic behavior quality; it is not a separate gate.
