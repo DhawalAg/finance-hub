@@ -13,8 +13,6 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-import pytest
-
 REPO_ROOT = Path(__file__).parent.parent
 MATERIALIZATION_LIST = REPO_ROOT / "evals" / "materialization_list.txt"
 
