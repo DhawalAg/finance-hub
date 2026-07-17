@@ -139,15 +139,13 @@ class TestEnvClock:
         with pytest.raises(ValueError, match="FINANCE_HUB_NOW"):
             factories._apply_env_clock()
 
-    def test_invalid_value_leaves_no_clock_set(self):
-        # After a failed _apply_env_clock, clock must not silently be real
+    def test_invalid_value_leaves_clock_unchanged(self):
+        # A failed _apply_env_clock must not install a partial/fallback clock.
+        before = factories.get_clock()
         os.environ["FINANCE_HUB_NOW"] = "garbage"
         with pytest.raises(ValueError):
             factories._apply_env_clock()
-        # The real clock is still the module default; we just confirm no silent fallback happened
-        # (the ValueError propagated — no partial state installed)
-        # Real clock is still in place from setup_method's reset(), or whatever was before
-        assert factories.get_clock() is not None  # basic sanity
+        assert factories.get_clock() is before
 
     def test_frozen_clock_returns_same_instant_every_call(self):
         os.environ["FINANCE_HUB_NOW"] = "2025-01-01T00:00:00+00:00"
