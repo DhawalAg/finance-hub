@@ -296,7 +296,6 @@ async def _run_one_trial_async(
 
 
 async def _gather_trials(
-    k: int,
     task: dict,
     trial_dirs: list[Path],
     fixture_envs: list[dict[str, str]],
@@ -308,10 +307,10 @@ async def _gather_trials(
 ) -> list[tuple[Transcript, list[GraderResult]]]:
     coros = [
         _run_one_trial_async(
-            i, task, trial_dirs[i], fixture_envs[i],
+            i, task, trial_dir, fixture_env,
             runner, model, max_turns, run_dir, graded_at,
         )
-        for i in range(k)
+        for i, (trial_dir, fixture_env) in enumerate(zip(trial_dirs, fixture_envs))
     ]
     return list(await asyncio.gather(*coros))
 
@@ -385,7 +384,7 @@ def run(
         # Run k trials concurrently (spec §9 req 3).
         trial_results: list[tuple[Transcript, list[GraderResult]]] = asyncio.run(
             _gather_trials(
-                k, task, trial_dirs, trial_fixture_envs,
+                task, trial_dirs, trial_fixture_envs,
                 runner, model, max_turns, run_dir, graded_at,
             )
         )
@@ -395,7 +394,7 @@ def run(
 
     finished_at = datetime.now(timezone.utc).isoformat()
 
-    all_trial_verdicts = [r[1] for r in trial_results]
+    all_trial_verdicts = [verdicts for _, verdicts in trial_results]
     pass_k_result = _compute_pass_k(all_trial_verdicts)
     pass_at_k_result = _compute_pass_at_k(all_trial_verdicts)
 
@@ -416,11 +415,11 @@ def run(
         "trials": [
             {
                 "trial_idx": i,
-                "num_turns": trial_results[i][0].num_turns,
-                "total_cost_usd": trial_results[i][0].total_cost_usd,
-                "gate_pass": _trial_gate_pass(trial_results[i][1]),
+                "num_turns": transcript.num_turns,
+                "total_cost_usd": transcript.total_cost_usd,
+                "gate_pass": _trial_gate_pass(verdicts),
             }
-            for i in range(k)
+            for i, (transcript, verdicts) in enumerate(trial_results)
         ],
     }
     (run_dir / "meta.json").write_text(json.dumps(meta, indent=2) + "\n")
@@ -499,21 +498,19 @@ def emit_suite_report(results_root: Path) -> None:
     for group_label, group in [("Regression", regression), ("Capability", capability)]:
         if not group:
             continue
+        is_regression = group_label == "Regression"
+        metric_key = "pass_k" if is_regression else "pass_at_k"
+        policy = "pass^k" if is_regression else "pass@k"
+
         print(f"\n{group_label}:")
         print(f"  {'Task':<10} {'pass^k':<10} {'pass@k':<10} {'Run'}")
         print(f"  {'-'*60}")
-        passing = 0
         for m in sorted(group, key=lambda x: x["task_id"]):
             pk = "PASS" if m.get("pass_k") else "FAIL"
             pak = "PASS" if m.get("pass_at_k") else "FAIL"
             print(f"  {m['task_id']:<10} {pk:<10} {pak:<10} {m['run_id']}")
-            if group_label == "Regression" and m.get("pass_k"):
-                passing += 1
-            elif group_label == "Capability" and m.get("pass_at_k"):
-                passing += 1
-        total = len(group)
-        policy = "pass^k" if group_label == "Regression" else "pass@k"
+        passing = sum(1 for m in group if m.get(metric_key))
         print(f"  {'-'*60}")
-        print(f"  {policy} aggregate: {passing}/{total} tasks passing")
+        print(f"  {policy} aggregate: {passing}/{len(group)} tasks passing")
 
     print(f"\n{'='*64}\n")
