@@ -19,9 +19,13 @@ evals/
     R10.yaml          R10/golden/
     R11.yaml          R11/golden/
     R12.yaml          R12/golden/
+    C1.yaml           C1/
+    C2.yaml           C2/
+    C3.yaml           C3/
+    C7.yaml           C7/
   fixtures/           # Fixture build scripts (scripts only; materialized DBs are .gitignored)
   rubrics/            # Versioned LLM-judge rubrics (§6.3)
-  harness/            # Runner, grader registry, report (Phase 1 — not yet)
+  harness/            # Runner, grader registry, report
   results/            # Run artifacts — gitignored wholesale (§8.3)
 ```
 
@@ -34,7 +38,7 @@ evals/
 | 2 | pass^3, concurrent trials, re-grading, per-run report | Complete — #46 |
 | 3 | Trajectory + breadth | Not started |
 | 4 | Judge + calibration | Not started |
-| 5 | Capability frontier | Not started |
+| 5 | Capability frontier | In progress — C1/C2/C3/C7 authored (issue #49) |
 
 ## Phase 0 Tasks Authored
 
@@ -55,6 +59,20 @@ evals/
 
 All 12 regression tasks from spec §10 are authored. Each has: prompt, reference solution,
 manual golden-run transcript, and ambiguity notes. Phase 0 complete.
+
+## Phase 4 Capability Tasks (issue #49)
+
+| ID | Suite | Workflow | Status |
+|---|---|---|---|
+| C1 | capability | market-data | Full (prompt + reference + graders + fixture) |
+| C2 | capability | planning | Full (prompt + reference + graders + fixture) |
+| C3 | capability | planning | Full (prompt + reference + graders + fixture) |
+| C7 | capability | planning (negative) | Full (prompt + reference + graders + fixture) |
+
+C1/C2/C3/C7 are the one-time-buy + market-data capability tasks (spec §10 seed table).
+Golden transcripts deferred to each task's migration-to-regression moment (spec §7).
+Frontier tasks are tagged pass@k — one good run demonstrates the capability exists.
+Passing is not required; the frontier is expected to start low.
 
 ## Fixtures
 

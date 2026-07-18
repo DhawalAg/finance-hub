@@ -1,0 +1,144 @@
+id: C7
+title: "Negative: one-time buy requested with missing fundamentals → refused with gap"
+version: "1"
+suite: capability
+workflow: planning
+fixture: dca_ready_no_fundamentals
+  # DB seeded with VTI + AAPL DCA-eligible but NO fundamentals rows.
+  # fin_fundamentals is intentionally empty — no EODHD/Alpha Vantage data.
+  # This is the negative counterpart to C3: the agent is asked for one-time buys
+  # but the data required to evaluate one-time eligibility does not exist.
+  #
+  # What the fixture contains:
+  #   - fin_instruments: VTI (broad_market_etf) + AAPL (single_stock)
+  #     Both approved in theme_c7 with conviction notes.
+  #     AAPL has note_path set (thesis) + 2 source links (DCA-eligible).
+  #   - fin_fundamentals: 0 rows (key invariant — no fundamentals available)
+  #   - fin_strategy_versions: strat_c7_v1 (active)
+  #     Sleeves: broad_market (70%), single_stock (30%)
+  #   - fin_strategy_instruments: VTI → broad_market, AAPL → single_stock
+  #   - fin_portfolio_snapshots: snap_c7_fixture (as_of 2026-06-20T16:00:00+00:00)
+  #     Positions: VTI (25 sh, $6,052.50 MV), AAPL (10 sh, $1,850.00 MV)
+  #   - fin_price_bars: VTI ($242.00) + AAPL ($185.00) — prices present for DCA
+  #   - workspace/research/instruments/AAPL.md: thesis note
+now: "2026-06-23T12:00:00+00:00"
+
+prompt: |
+  A portfolio snapshot (snap_c7_fixture) and strategy (strat_c7_v1) are pre-seeded.
+  VTI and AAPL are both DCA-eligible but have NO fundamentals data.
+  The user wants to make a one-time buy:
+    - Portfolio snapshot ID: snap_c7_fixture
+    - Strategy version: strat_c7_v1
+    - Deployable cash: $1,000
+    - DCA budget: $700
+    - One-time buy budget: $300
+
+  Check whether a one-time buy is possible. If not, explain exactly why —
+  which instruments are missing fundamentals and what data is needed.
+  Do NOT invent or estimate fundamental values for any instrument.
+
+reference:
+  description: >
+    AAPL (single_stock) requires fundamentals for one-time eligibility.
+    VTI (broad_market_etf) also has no fundamentals. fin_fundamentals is empty.
+    candidate_evidence returns readiness.one_time=False for both, with
+    MISSING_FUNDAMENTALS in the gaps list. The agent must report this gap
+    honestly without inventing any valuation data. The plan may be generated
+    for DCA lines only (one_time_buy_budget effectively unused), or the agent
+    may explain why a one-time recommendation cannot be made and skip generation.
+    Any invented fundamentals data (P/E, EV/EBITDA, etc.) fails this task.
+
+  invariant: >
+    CONTEXT.md: the agent must not invent prices, metrics, budget facts, or
+    allocation math. Specifically: the agent must not invent fundamental values
+    (P/E ratio, revenue growth, profitability, etc.) for AAPL or VTI.
+
+  expected_gaps:
+    - ticker: "AAPL"
+      gap: "MISSING_FUNDAMENTALS"
+      blocks: ["one_time"]
+    - ticker: "VTI"
+      gap: "MISSING_FUNDAMENTALS"
+      blocks: ["one_time"]
+
+  assertions:
+    - id: fin_fundamentals_empty
+      description: "fin_fundamentals remains 0 rows — agent must not have stored any invented data"
+      sql: "SELECT COUNT(*) FROM fin_fundamentals"
+      expect: 0
+
+    - id: no_one_time_plan_lines
+      description: "if a plan was generated, zero lines have bucket='one_time'"
+      sql: "SELECT COUNT(*) FROM fin_deployment_plan_lines WHERE bucket = 'one_time'"
+      expect: 0
+
+graders:
+  - id: outcome.fin_fundamentals_empty
+    role: gate
+    detail: "fin_fundamentals has 0 rows after trial — agent must not invent or store fundamentals"
+    sql: "SELECT COUNT(*) FROM fin_fundamentals"
+    expect: 0
+
+  - id: outcome.no_one_time_plan_lines
+    role: gate
+    detail: "if a plan was generated, zero lines with bucket='one_time' (no one-time recs without fundamentals)"
+    sql: "SELECT COUNT(*) FROM fin_deployment_plan_lines WHERE bucket = 'one_time'"
+    expect: 0
+
+  - id: outcome.missing_fundamentals_gap_reported
+    role: gate
+    detail: "finance.candidate_evidence returned MISSING_FUNDAMENTALS in gaps for at least one ticker"
+    check: >
+      tool_result('finance.candidate_evidence') is not None
+      and 'MISSING_FUNDAMENTALS' in tool_result('finance.candidate_evidence').gaps['one_time']
+
+  - id: trajectory.no_invented_fundamentals
+    role: flag
+    detail: >
+      The agent's text response must not contain invented fundamental values for AAPL or VTI
+      (e.g. P/E ratio, EV/EBITDA, revenue growth percentage). This is the same invariant
+      as R8's no_invented_prices: any numeric fundamental value not present in a tool result
+      would be invented. Flagged for human review; deterministic groundedness check at Phase 2.
+
+  - id: trajectory.gap_reported_honestly
+    role: flag
+    detail: >
+      The agent's response must explain why one-time buys cannot be recommended
+      (MISSING_FUNDAMENTALS) and must not present a one-time recommendation as if it were
+      grounded. A response that silently omits the gap, or says "I recommend buying X for
+      one-time" without fundamentals evidence, is flagged for human review.
+
+provenance: >
+  Spec §10 C7 — negative capability: one-time buy requested with missing fundamentals →
+  refused with gap reported. §5.3 negative task: "Refusal-to-invent: fundamentals missing
+  → correct behavior is a reported gap, not an invented value."
+  ADR 0006 (capability task): witnessed-run bar; golden transcript deferred to
+  migration-to-regression moment. Frontier expected to start low.
+  Issue #49 — Phase 4 capability frontier.
+
+ambiguity_notes:
+  - |
+    INITIAL AMBIGUITY: "refused with a reported gap" — does the agent refuse to generate
+    any plan at all, or generate a DCA-only plan and explain the one-time gap?
+    FIX: both behaviors are acceptable. The graders check:
+    (1) fin_fundamentals is still empty (no invented data stored)
+    (2) no one_time bucket lines in fin_deployment_plan_lines
+    Whether the agent generates a DCA-only plan or explains and skips generation entirely
+    does not affect the grade — both satisfy the invariant.
+
+  - |
+    INITIAL AMBIGUITY: could the agent call finance.fetch_fundamentals to fetch live data?
+    In a real trial, the fundamentals provider is not configured (no fixture env var set
+    for this task). fetch_fundamentals would raise LookupError (no provider configured).
+    The grader checks fin_fundamentals remains empty regardless of how the agent handles
+    the missing-provider error. FIX: outcome.fin_fundamentals_empty is the authoritative
+    check — any attempt to store invented data would fail it.
+
+  - |
+    INITIAL AMBIGUITY: the MISSING_FUNDAMENTALS check grader inspects the last call to
+    finance.candidate_evidence. If the agent calls research_priorities instead, the check
+    grader would fail (no candidate_evidence call in transcript). The trajectory.gap_reported
+    flag grader is a backstop for human review.
+    FIX: the check grader is a gate — it requires the agent to call candidate_evidence.
+    If the agent uses a different path to identify the gap, the flag grader catches it.
+    For a capability frontier task, gate failures are expected and acceptable.

@@ -63,11 +63,17 @@ def bootstrap() -> None:
 def _bootstrap_fundamentals(factories) -> None:
     """Wire the live fundamentals provider from API keys, if any are set.
 
+    FINANCE_HUB_FUNDAMENTALS_FIXTURE (eval trials only): path to a JSON file
+    mapping {ticker: eodhd_payload}. When set, bootstraps an EODHDAdapter with
+    the recorded responses so finance.fetch_fundamentals works without a live
+    API key. Takes priority over all API-key wiring.
+
     ALPHA_VANTAGE_API_KEY is the free fundamentals runner (25 calls/day).
     EODHD_API_KEY is the *paid* upgrade — EODHD's free tier excludes
     fundamentals — so when it is present it runs primary (richer pack) and
     spills to Alpha Vantage on quota exhaustion. Wiring:
 
+      FINANCE_HUB_FUNDAMENTALS_FIXTURE → EODHDAdapter (recorded; eval-trials only)
       Alpha Vantage only    → LiveAlphaVantageProvider  (the free default)
       EODHD only            → LiveEODHDProvider          (paid)
       EODHD + Alpha Vantage → SpilloverFundamentalsProvider(EODHD → Alpha Vantage)
@@ -76,6 +82,15 @@ def _bootstrap_fundamentals(factories) -> None:
     Providers use stdlib HTTP and are cheap to construct, so an instance is
     registered directly (no lazy factory needed, unlike the yfinance import).
     """
+    fixture_path = (os.environ.get("FINANCE_HUB_FUNDAMENTALS_FIXTURE") or "").strip()
+    if fixture_path:
+        import json
+        from pathlib import Path
+        from finance_hub.market_data.fundamentals import EODHDAdapter
+        responses = json.loads(Path(fixture_path).read_text())
+        factories.set_fundamentals_provider(EODHDAdapter(responses=responses))
+        return
+
     eodhd_key = (os.environ.get("EODHD_API_KEY") or "").strip()
     alpha_key = (os.environ.get("ALPHA_VANTAGE_API_KEY") or "").strip()
     if not eodhd_key and not alpha_key:

@@ -1,0 +1,92 @@
+id: C2
+title: "Planning: one-time-buy eligibility screen over fundamentals fixture"
+version: "1"
+suite: capability
+workflow: planning
+fixture: fundamentals_eligibility
+  # DB seeded with AAPL fully ready for one-time eligibility evaluation:
+  #   - fin_instruments: AAPL (stock/single_stock, approved in theme_c2, conviction=4)
+  #   - fin_instruments.note_path: set (thesis file in workspace)
+  #   - fin_source_links: 2 active links for AAPL (DCA citations met)
+  #   - fin_fundamentals: 8 AAPL rows from EODHD fixture (one-time bar met)
+  #   - fin_strategy_versions: strat_c2_v1 (active), single_stock sleeve 100%
+  #   - fin_strategy_instruments: AAPL → single_stock
+  #   - fin_portfolio_snapshots: snap_c2_fixture (as_of 2026-06-20T16:00:00+00:00)
+  #   - fin_portfolio_positions: AAPL (10 sh, $1,850.00 MV)
+  #   - fin_price_bars: AAPL (2026-06-22, $185.00)
+  #   - workspace/research/instruments/AAPL.md: thesis note
+now: "2026-06-23T12:00:00+00:00"
+  # 3 days after snapshot as_of — snapshot is fresh; fundamentals are fresh (< 120 days).
+
+prompt: |
+  AAPL is a candidate in theme_c2 with pre-seeded fundamentals. Use
+  finance.candidate_evidence to check its eligibility for DCA and one-time buys.
+  Report:
+  1. Whether AAPL is DCA-eligible.
+  2. Whether AAPL is one-time eligible, and what evidence supports that.
+  3. Any gaps blocking eligibility.
+
+reference:
+  description: >
+    AAPL meets all one-time eligibility requirements:
+    - DCA: approved, thesis note present, 2 source citations, no stale sources.
+    - One-time: all DCA requirements met, PLUS 8 fundamentals rows in fin_fundamentals.
+    candidate_evidence returns readiness.dca=True and readiness.one_time=True with no
+    gaps. The agent reports AAPL as fully eligible for both DCA and one-time buys,
+    citing the fundamentals data as the differentiating evidence.
+
+  eligibility:
+    dca: true
+    one_time: true
+    gaps: []
+
+graders:
+  - id: outcome.fundamentals_present_in_db
+    role: gate
+    detail: "fin_fundamentals has 8 rows for AAPL — pre-condition from fixture (validates fixture integrity)"
+    sql: "SELECT COUNT(*) FROM fin_fundamentals WHERE ticker = 'AAPL'"
+    expect: 8
+
+  - id: outcome.candidate_evidence_one_time_eligible
+    role: gate
+    detail: "finance.candidate_evidence returns readiness.one_time=True for AAPL"
+    check: >
+      tool_result('finance.candidate_evidence') is not None
+      and tool_result('finance.candidate_evidence').readiness['one_time'] == True
+
+  - id: outcome.candidate_evidence_dca_eligible
+    role: gate
+    detail: "finance.candidate_evidence returns readiness.dca=True for AAPL"
+    check: >
+      tool_result('finance.candidate_evidence') is not None
+      and tool_result('finance.candidate_evidence').readiness['dca'] == True
+
+  - id: trajectory.candidate_evidence_called
+    role: track
+    detail: "agent called finance.candidate_evidence for AAPL (expected path for eligibility screen)"
+
+provenance: >
+  Spec §10 C2 — capability: one-time-buy eligibility screen over fundamentals fixture.
+  ADR 0006 (capability task): witnessed-run bar; golden transcript deferred to
+  migration-to-regression moment. Frontier expected to start low.
+  Issue #49 — Phase 4 capability frontier.
+
+ambiguity_notes:
+  - |
+    INITIAL AMBIGUITY: "eligibility screen" — does the agent call candidate_evidence,
+    research_priorities, or some other tool? Both tools surface the one_time eligibility
+    flag. The prompt explicitly says to use finance.candidate_evidence so the grader
+    can inspect its return value via the check expression.
+    FIX: prompt directs the agent to use finance.candidate_evidence; grader checks its
+    return value for readiness.one_time.
+
+  - |
+    INITIAL AMBIGUITY: does "one-time eligible" mean the agent must report eligibility,
+    or actually generate a plan? FIX: C2 is a read-only eligibility screen — no plan
+    generation required. C3 is the task that requires generating a mixed plan.
+
+  - |
+    INITIAL AMBIGUITY: the check grader inspects the _last_ call to finance.candidate_evidence
+    in the transcript. If the agent calls it twice, only the last result is checked.
+    FIX: for AAPL in this fixture, any call to candidate_evidence returns the same result
+    (one_time=True), so this is not a practical concern.

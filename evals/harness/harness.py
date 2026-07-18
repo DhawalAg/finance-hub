@@ -48,6 +48,11 @@ _FIXTURE_BUILDERS: dict[str, str] = {
     "theme_with_candidate_msft":                   "evals.fixtures.build_theme_with_candidate_msft",
     # R12 — scope discipline: active strategy; research must not mutate strategy state
     "active_strategy_with_research_candidates":    "evals.fixtures.build_active_strategy_with_research_candidates",
+    # C1/C2/C3/C7 — capability one-time-buy + market-data tasks
+    "fetch_fundamentals_fixture":                  "evals.fixtures.build_fetch_fundamentals_fixture",
+    "fundamentals_eligibility":                    "evals.fixtures.build_fundamentals_eligibility",
+    "one_time_ready_deployment":                   "evals.fixtures.build_one_time_ready_deployment",
+    "dca_ready_no_fundamentals":                   "evals.fixtures.build_dca_ready_no_fundamentals",
 }
 
 

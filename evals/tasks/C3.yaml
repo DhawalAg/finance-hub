@@ -1,0 +1,198 @@
+id: C3
+title: "Planning: mixed DCA + one-time plan; bucket math and evidence refs"
+version: "1"
+suite: capability
+workflow: planning
+fixture: one_time_ready_deployment
+  # DB seeded with VTI + AAPL both DCA- and one-time-eligible:
+  #   - fin_instruments: VTI (etf/broad_market_etf) + AAPL (stock/single_stock)
+  #     Both approved in theme_c3 with conviction notes.
+  #     AAPL has note_path set (thesis in workspace) + 2 source links.
+  #   - fin_fundamentals: AAPL (8 rows, source=eodhd) + VTI (5 rows, source=eodhd)
+  #     One-time eligibility met for both instruments.
+  #   - fin_strategy_versions: strat_c3_v1 (active)
+  #     Sleeves: broad_market (70%), single_stock (30%)
+  #   - fin_strategy_instruments: VTI → broad_market, AAPL → single_stock
+  #   - fin_portfolio_snapshots: snap_c3_fixture (as_of 2026-06-20T16:00:00+00:00)
+  #     Positions: VTI (25 sh, $6,052.50 MV), AAPL (10 sh, $1,850.00 MV)
+  #   - fin_price_bars: VTI ($242.00, 2026-06-22) + AAPL ($185.00, 2026-06-22)
+  #   - workspace/research/instruments/AAPL.md: thesis note
+now: "2026-06-23T12:00:00+00:00"
+  # 3 days after snapshot as_of — snapshot is fresh (≤ 7 days); prices are fresh.
+
+prompt: |
+  A portfolio snapshot (snap_c3_fixture) and strategy (strat_c3_v1) are pre-seeded.
+  VTI and AAPL both have fundamentals available (pre-fetched). Generate a mixed
+  deployment plan:
+    - Portfolio snapshot ID: snap_c3_fixture
+    - Strategy version: strat_c3_v1
+    - Deployable cash: $1,000
+    - DCA budget: $700
+    - One-time buy budget: $300
+    - Risk mode: balanced
+
+  Report the plan's DCA lines, one-time buy lines, evidence references, and whether
+  the total allocations stay within budget.
+
+reference:
+  description: >
+    The agent calls finance.generate_deployment_plan with DCA budget $700 and
+    one-time budget $300. The fixture satisfies all eligibility requirements:
+    - VTI is DCA-eligible (broad_market_etf, no thesis required, has price).
+    - AAPL is DCA-eligible and one-time eligible (thesis + citations + fundamentals).
+    The plan is generated as a deployment_draft with status=proposed (fresh snapshot).
+    DCA lines are funded from the $700 DCA bucket; one-time lines from the $300 bucket.
+    Total allocations do not exceed deployable_cash ($1,000). Every line has evidence
+    references. The memo artifact appears in workspace/drafts/.
+
+  plan:
+    output_mode: "deployment_draft"
+    status: "proposed"
+    portfolio_snapshot_id: "snap_c3_fixture"
+    strategy_version_id: "strat_c3_v1"
+    deployable_cash_micros: 1000000000   # $1,000.00
+    dca_budget_micros: 700000000         # $700.00
+    one_time_buy_budget_micros: 300000000  # $300.00
+    snapshot_freshness_band: "fresh"     # 3 days old
+
+  assertions:
+    - id: plan_row_exists
+      description: "fin_deployment_plans has exactly 1 row after the trial"
+      sql: "SELECT COUNT(*) FROM fin_deployment_plans"
+      expect: 1
+
+    - id: plan_is_deployment_draft
+      description: "output_mode is deployment_draft (fresh snapshot + eligible instruments)"
+      sql: "SELECT output_mode FROM fin_deployment_plans LIMIT 1"
+      expect: "deployment_draft"
+
+    - id: plan_status_proposed
+      description: "plan status is proposed (not approved — approval is a separate step)"
+      sql: "SELECT status FROM fin_deployment_plans LIMIT 1"
+      expect: "proposed"
+
+    - id: has_dca_lines
+      description: "at least 1 DCA bucket line generated"
+      sql: "SELECT COUNT(*) FROM fin_deployment_plan_lines WHERE bucket = 'dca'"
+      expect_min: 1
+
+    - id: has_one_time_lines
+      description: "at least 1 one-time bucket line generated for AAPL"
+      sql: "SELECT COUNT(*) FROM fin_deployment_plan_lines WHERE bucket = 'one_time'"
+      expect_min: 1
+
+    - id: total_within_budget
+      description: "sum of all line amounts ≤ deployable_cash_micros ($1,000)"
+      sql: >
+        SELECT CASE WHEN SUM(amount_micros) <= 1000000000 THEN 1 ELSE 0 END
+        FROM fin_deployment_plan_lines
+      expect: 1
+
+    - id: every_line_has_evidence_ref
+      description: "every plan line has ≥1 evidence reference in fin_deployment_plan_evidence"
+      sql: >
+        SELECT COUNT(*) FROM fin_deployment_plan_lines l
+        WHERE l.line_id NOT IN (
+          SELECT DISTINCT line_id FROM fin_deployment_plan_evidence
+        )
+      expect: 0
+
+    - id: plan_not_approved
+      description: "plan must not be approved — approval is a separate task"
+      sql: "SELECT COUNT(*) FROM fin_deployment_plans WHERE status = 'approved'"
+      expect: 0
+
+graders:
+  - id: outcome.plan_row_exists
+    role: gate
+    detail: "fin_deployment_plans has exactly 1 row after the trial"
+    sql: "SELECT COUNT(*) FROM fin_deployment_plans"
+    expect: 1
+
+  - id: outcome.plan_is_deployment_draft
+    role: gate
+    detail: "output_mode is deployment_draft (fresh snapshot + eligible instruments)"
+    sql: "SELECT output_mode FROM fin_deployment_plans LIMIT 1"
+    expect: "deployment_draft"
+
+  - id: outcome.has_dca_lines
+    role: gate
+    detail: "at least 1 DCA bucket line (1 → plan has DCA allocations)"
+    sql: >
+      SELECT CASE WHEN COUNT(*) >= 1 THEN 1 ELSE 0 END
+      FROM fin_deployment_plan_lines WHERE bucket = 'dca'
+    expect: 1
+
+  - id: outcome.has_one_time_lines
+    role: gate
+    detail: "at least 1 one-time bucket line (1 → one-time buy recommendation generated)"
+    sql: >
+      SELECT CASE WHEN COUNT(*) >= 1 THEN 1 ELSE 0 END
+      FROM fin_deployment_plan_lines WHERE bucket = 'one_time'
+    expect: 1
+
+  - id: outcome.total_within_budget
+    role: gate
+    detail: "sum of all line amounts ≤ deployable_cash_micros ($1,000)"
+    sql: >
+      SELECT CASE WHEN SUM(amount_micros) <= 1000000000 THEN 1 ELSE 0 END
+      FROM fin_deployment_plan_lines
+    expect: 1
+
+  - id: outcome.every_line_has_evidence_ref
+    role: gate
+    detail: "every plan line has ≥1 evidence reference in fin_deployment_plan_evidence"
+    sql: >
+      SELECT COUNT(*) FROM fin_deployment_plan_lines l
+      WHERE l.line_id NOT IN (
+        SELECT DISTINCT line_id FROM fin_deployment_plan_evidence
+      )
+    expect: 0
+
+  - id: outcome.plan_not_approved
+    role: gate
+    detail: "plan status must not be approved (approval is a separate gate)"
+    sql: "SELECT COUNT(*) FROM fin_deployment_plans WHERE status = 'approved'"
+    expect: 0
+
+  - id: trajectory.generate_deployment_plan_called
+    role: track
+    detail: "agent called finance.generate_deployment_plan (expected; track for baseline)"
+
+  - id: trajectory.one_time_budget_passed
+    role: track
+    detail: "agent passed one_time_buy_budget > 0 to generate_deployment_plan (expected)"
+
+provenance: >
+  Spec §10 C3 — capability: mixed DCA + one-time plan; bucket math and evidence refs.
+  ADR 0006 (capability task): witnessed-run bar; golden transcript deferred to
+  migration-to-regression moment. Frontier expected to start low.
+  Issue #49 — Phase 4 capability frontier.
+
+ambiguity_notes:
+  - |
+    INITIAL AMBIGUITY: "mixed DCA + one-time plan" — does this require both buckets
+    to have lines, or can the agent generate a DCA-only plan and still pass?
+    FIX: outcome.has_one_time_lines is a gate grader — at least 1 one-time line is
+    required for the task to pass. If the agent generates DCA-only, the gate fails.
+    Capability tasks start low; this gate defines the capability claim.
+
+  - |
+    INITIAL AMBIGUITY: does "bucket math" mean verifying the split between DCA and
+    one-time budgets, or just that both are non-zero? FIX: "bucket math" is verified
+    by (1) at least 1 line per bucket and (2) total allocations ≤ deployable_cash.
+    Fine-grained per-bucket totals are not graded at Phase 4 — they're deferred to
+    when this task migrates to regression and gets a golden transcript.
+
+  - |
+    INITIAL AMBIGUITY: the prompt specifies a deployable_cash ($1,000) and a split
+    ($700 DCA / $300 one-time). Does the agent have to follow these exactly?
+    FIX: generate_deployment_plan raises if dca_budget + one_time_buy_budget > deployable_cash.
+    The graders verify: (a) plan exists, (b) both buckets have lines, (c) total ≤ $1,000.
+    The specific DCA/one-time split is left to the engine.
+
+  - |
+    INITIAL AMBIGUITY: VTI is broad_market_etf; does it get one-time lines even though
+    ETFs don't traditionally require fundamentals screening? The fundamentals for VTI
+    are pre-seeded (5 rows) so one-time eligibility requirements are met. The engine
+    decides allocation; the graders verify the outcome, not the specific tickers.

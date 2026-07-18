@@ -1,0 +1,119 @@
+id: C1
+title: "Market data: fetch fundamentals for candidate; verify stored rows + provenance"
+version: "1"
+suite: capability
+workflow: market-data
+fixture: fetch_fundamentals_fixture
+  # DB seeded with AAPL registered as a candidate instrument in theme_c1.
+  # fin_fundamentals is intentionally empty — fetching fundamentals is the action
+  # under test. FINANCE_HUB_FUNDAMENTALS_FIXTURE points to a recorded EODHD
+  # response for AAPL (evals/fixtures/build_fetch_fundamentals_fixture.py).
+  #
+  # What the fixture contains:
+  #   - fin_instruments: AAPL (stock/single_stock, status=candidate)
+  #   - fin_themes: theme_c1 (status=watching, display_name="Market Data Candidates")
+  #   - fin_fundamentals: 0 rows (empty — fetch is the action under test)
+  #   - fixture/eodhd_responses.json: recorded EODHD response for AAPL
+  #   - FINANCE_HUB_FUNDAMENTALS_FIXTURE: set to fixture/eodhd_responses.json
+now: "2026-06-23T12:00:00+00:00"
+
+prompt: |
+  AAPL is registered as a candidate instrument in theme_c1.
+  Fetch its fundamentals using finance.fetch_fundamentals and report:
+  1. How many fields were stored in the database.
+  2. The data source (which provider returned the data).
+  3. Which fields are now available, and a sample of their values.
+
+reference:
+  description: >
+    The agent calls finance.fetch_fundamentals for AAPL. The recorded EODHD
+    fixture returns 8 fields. All are stored in fin_fundamentals with
+    source='eodhd' and grade='screening'. The tool response reports stored=8
+    and each field with availability='available'. The fetched_at timestamp
+    matches the frozen clock (2026-06-23T12:00:00+00:00).
+
+  fundamentals:
+    ticker: "AAPL"
+    source: "eodhd"
+    stored: 8
+    fields:
+      - revenue_growth
+      - profitability
+      - ps
+      - forward_ps
+      - ev_ebitda
+      - total_debt
+      - total_cash
+      - next_earnings_date
+
+  # Expected post-trial DB state
+  db_assertions:
+    - table: fin_fundamentals
+      where: "ticker = 'AAPL'"
+      count: 8
+      note: "All 8 EODHD stock fields stored after fetch"
+
+    - table: fin_fundamentals
+      where: "ticker = 'AAPL' AND source = 'eodhd'"
+      count: 8
+      note: "Source provenance is 'eodhd' for all rows"
+
+graders:
+  - id: outcome.fundamentals_row_count
+    role: gate
+    detail: "fin_fundamentals has exactly 8 rows for AAPL after the trial (all EODHD stock fields)"
+    sql: "SELECT COUNT(*) FROM fin_fundamentals WHERE ticker = 'AAPL'"
+    expect: 8
+
+  - id: outcome.fundamentals_source_eodhd
+    role: gate
+    detail: "all stored rows have source='eodhd' (from the recorded fixture adapter)"
+    sql: >
+      SELECT COUNT(*) FROM fin_fundamentals
+      WHERE ticker = 'AAPL' AND source = 'eodhd'
+    expect: 8
+
+  - id: outcome.fundamentals_grade_screening
+    role: gate
+    detail: "all stored rows have grade='screening' (aggregator data; not filing-grounded)"
+    sql: >
+      SELECT COUNT(*) FROM fin_fundamentals
+      WHERE ticker = 'AAPL' AND grade = 'screening'
+    expect: 8
+
+  - id: outcome.fetch_fundamentals_tool_called
+    role: gate
+    detail: "finance.fetch_fundamentals was called and returned stored=8"
+    check: >
+      tool_result('finance.fetch_fundamentals') is not None
+      and tool_result('finance.fetch_fundamentals').stored == 8
+
+  - id: trajectory.fetch_fundamentals_called_for_aapl
+    role: track
+    detail: "agent called finance.fetch_fundamentals for AAPL (expected tool; track for cross-version)"
+
+provenance: >
+  Spec §10 C1 — market-data capability: fetch + store + provenance chain.
+  ADR 0006 (capability task): witnessed-run bar; golden transcript deferred to
+  migration-to-regression moment. Frontier expected to start low.
+  Issue #49 — Phase 4 capability frontier.
+
+ambiguity_notes:
+  - |
+    INITIAL AMBIGUITY: "verify stored rows + provenance" — does the agent need to
+    call fetch_fundamentals first, or just read existing rows? Since fin_fundamentals
+    is empty in the fixture, the agent must call fetch_fundamentals to store anything.
+    FIX: prompt explicitly asks the agent to fetch using finance.fetch_fundamentals.
+
+  - |
+    INITIAL AMBIGUITY: how many fields does EODHD return for a stock? The normalize_eodhd
+    function extracts 8 fields for stocks (revenue_growth, profitability, ps, forward_ps,
+    ev_ebitda, total_debt, total_cash, next_earnings_date) — fewer than the full STOCK_FIELDS
+    vocabulary because EODHD's Highlights/Valuation blocks only populate this subset.
+    FIX: grader asserts COUNT(*) = 8, matching normalize_eodhd's actual output for eodhd_aapl.json.
+
+  - |
+    INITIAL AMBIGUITY: the "check" grader for tool call verification requires the agent
+    to call finance.fetch_fundamentals (not just read from existing rows). For Phase-4
+    capability tasks, the agent may fail this gate — that is expected (frontier starts low).
+    FIX: gate grader is included; capability task pass-rate, not a regression block.
