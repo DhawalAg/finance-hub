@@ -48,6 +48,7 @@ class GraderResult:
     verdict: str        # pass | fail | skip
     detail: str
     actual: Any = field(default=None)
+    graded_at: str | None = field(default=None)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -56,6 +57,7 @@ class GraderResult:
             "verdict": self.verdict,
             "detail": self.detail,
             "actual": self.actual,
+            "graded_at": self.graded_at,
         }
 
 
@@ -318,11 +320,14 @@ def _resolve_spec(grader_spec: dict, task: dict) -> dict | None:
 # Grader runners
 # ---------------------------------------------------------------------------
 
-def _run_sql_grader(spec: dict, db_path: Path) -> GraderResult:
+def _run_sql_grader(spec: dict, db_path: Path | None) -> GraderResult:
     gid = spec["id"]
     role = spec.get("role", "gate")
     detail = spec.get("detail", "")
     sql = spec["sql"]
+
+    if db_path is None:
+        return GraderResult(gid, role, "skip", detail, actual="sql grader skipped: no db_path")
 
     try:
         with sqlite3.connect(db_path) as conn:
@@ -752,7 +757,7 @@ def compose_verdict(results: list[GraderResult]) -> ComposedVerdict:
 
 def grade(
     transcript: Transcript,
-    db_path: Path,
+    db_path: Path | None,
     workspace: Path,
     task: dict,
 ) -> list[GraderResult]:

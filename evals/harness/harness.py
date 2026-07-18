@@ -1,9 +1,12 @@
-"""Harness MVP — R1 end-to-end (spec §9, Phase 1).
+"""Harness — k-trial orchestrator with re-grading and per-run report (spec §8, §9).
 
-Orchestrates: task validation → fixture materialisation → runtime surface
-materialisation → prompt-hash computation → trial run → transcript
-persistence → grading → run-dir layout (meta.json, transcript.jsonl,
-verdicts.jsonl) → minimal report.
+Orchestrates: task validation → fixture materialisation (sequential, k copies) →
+runtime surface materialisation → prompt-hash computation → k concurrent trial runs →
+grading → run-dir layout (meta.json, trial_N/transcript.jsonl, trial_N/verdicts.jsonl)
+→ per-run report.
+
+Re-grading (spec §9 req 5): regrade() re-runs graders against stored transcripts
+without re-running trials; appends new rows to trial_N/verdicts.jsonl.
 """
 from __future__ import annotations
 
@@ -150,6 +153,22 @@ def _make_trial_env(
     )
 
 
+def _trial_gate_pass(verdicts: list[GraderResult]) -> bool:
+    """True iff all gate graders in this trial passed."""
+    gate = [v for v in verdicts if v.role == "gate"]
+    return bool(gate) and all(v.verdict == "pass" for v in gate)
+
+
+def _compute_pass_k(all_trial_verdicts: list[list[GraderResult]]) -> bool:
+    """pass^k: every trial passes all its gate graders (spec §8.1)."""
+    return all(_trial_gate_pass(vs) for vs in all_trial_verdicts)
+
+
+def _compute_pass_at_k(all_trial_verdicts: list[list[GraderResult]]) -> bool:
+    """pass@k: at least one trial passes all its gate graders (spec §8.1)."""
+    return any(_trial_gate_pass(vs) for vs in all_trial_verdicts)
+
+
 def _write_verdicts_jsonl(path: Path, verdicts: list[GraderResult]) -> None:
     path.write_text(
         "\n".join(json.dumps(v.to_dict()) for v in verdicts) + "\n"
@@ -158,56 +177,192 @@ def _write_verdicts_jsonl(path: Path, verdicts: list[GraderResult]) -> None:
     )
 
 
-def _emit_report(meta: dict, verdicts: list[GraderResult]) -> None:
-    gate_verdicts = [v for v in verdicts if v.role == "gate"]
-    passed = sum(1 for v in gate_verdicts if v.verdict == "pass")
-    total = len(gate_verdicts)
-    overall = "PASS" if passed == total else "FAIL"
+def _append_verdicts_jsonl(path: Path, verdicts: list[GraderResult]) -> None:
+    """Append new verdict rows to an existing verdicts.jsonl (re-grade pass)."""
+    if not verdicts:
+        return
+    with open(path, "a") as f:
+        for v in verdicts:
+            f.write(json.dumps(v.to_dict()) + "\n")
 
-    print(f"\n{'='*60}")
-    print(f"Run: {meta['run_id']}")
-    print(f"Task: {meta['task_id']} v{meta['task_version']}")
-    print(f"Model: {meta['model']}  prompt_hash: {meta['prompt_hash'][:12]}…")
-    print(f"{'='*60}")
-    for v in verdicts:
-        mark = "✓" if v.verdict == "pass" else "✗"
-        print(f"  {mark} [{v.role:5s}] {v.grader_id:<38} {v.verdict.upper()}")
-        if v.verdict == "fail" and v.actual is not None:
-            print(f"         actual={v.actual!r}")
-    print(f"{'='*60}")
-    print(f"Overall: {overall} ({passed}/{total} gate verdicts passed)")
-    print(f"{'='*60}\n")
+
+def _find_prior_run(run_dir: Path, task_id: str) -> Path | None:
+    """Return the most recent prior run dir for task_id in the same results dir."""
+    results_dir = run_dir.parent
+    if not results_dir.exists():
+        return None
+    candidates = sorted(
+        [
+            d for d in results_dir.iterdir()
+            if d.is_dir()
+            and d.name.startswith(f"{task_id}_")
+            and d.name != run_dir.name
+            and (d / "meta.json").exists()
+        ],
+        key=lambda d: d.name,
+        reverse=True,
+    )
+    return candidates[0] if candidates else None
+
+
+def _read_track_metrics(run_dir: Path, k: int) -> dict[str, list[Any]]:
+    """Collect track-role verdict actuals across all trials in a run dir."""
+    result: dict[str, list[Any]] = {}
+    for i in range(k):
+        verdicts_path = run_dir / f"trial_{i}" / "verdicts.jsonl"
+        if not verdicts_path.exists():
+            continue
+        for line in verdicts_path.read_text().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            d = json.loads(line)
+            if d.get("role") == "track" and d.get("actual") is not None:
+                result.setdefault(d["grader_id"], []).append(d["actual"])
+    return result
+
+
+def _emit_report(
+    meta: dict,
+    all_trial_verdicts: list[list[GraderResult]],
+    run_dir: Path,
+) -> None:
+    """Emit the per-run console report (spec §8.2)."""
+    k = meta.get("k", 1)
+    suite = meta.get("suite", "regression")
+    pass_k = meta.get("pass_k", False)
+    pass_at_k = meta.get("pass_at_k", False)
+
+    prior_dir = _find_prior_run(run_dir, meta["task_id"])
+    prior_track: dict[str, list[Any]] = {}
+    if prior_dir:
+        prior_meta = json.loads((prior_dir / "meta.json").read_text())
+        prior_track = _read_track_metrics(prior_dir, prior_meta.get("k", 1))
+
+    print(f"\n{'='*64}")
+    print(f"Run:   {meta['run_id']}  Suite: {suite}")
+    print(f"Task:  {meta['task_id']} v{meta['task_version']}")
+    print(f"Model: {meta['model']}  hash: {meta['prompt_hash'][:12]}…")
+    print(f"{'='*64}")
+
+    for i, verdicts in enumerate(all_trial_verdicts):
+        transcript_link = str(run_dir / f"trial_{i}" / "transcript.jsonl")
+        print(f"\nTrial {i}  [{transcript_link}]")
+        for v in verdicts:
+            mark = "✓" if v.verdict == "pass" else ("~" if v.verdict == "skip" else "✗")
+            print(f"  {mark} [{v.role:5s}] {v.grader_id:<42} {v.verdict.upper()}")
+            if v.verdict == "fail" and v.actual is not None:
+                print(f"         actual={v.actual!r}")
+            if v.role == "track" and v.actual is not None:
+                prior_vals = prior_track.get(v.grader_id, [])
+                if prior_vals and isinstance(v.actual, (int, float)):
+                    prior_avg = sum(prior_vals) / len(prior_vals)
+                    delta = v.actual - prior_avg
+                    sign = "+" if delta >= 0 else ""
+                    print(f"         track={v.actual}  Δ={sign}{delta:.2f} vs prior")
+                else:
+                    print(f"         track={v.actual}  (no prior)")
+
+    print(f"\n{'='*64}")
+    policy_label = "pass^k" if suite == "regression" else "pass@k"
+    overall = pass_k if suite == "regression" else pass_at_k
+    overall_str = "PASS" if overall else "FAIL"
+    gate_passing = sum(1 for vs in all_trial_verdicts if _trial_gate_pass(vs))
+    print(f"pass^{k}: {'PASS' if pass_k else 'FAIL'}  |  pass@{k}: {'PASS' if pass_at_k else 'FAIL'}")
+    print(f"Gate:  {gate_passing}/{k} trials passing  |  Policy: {policy_label} → {overall_str}")
+    if prior_dir:
+        print(f"Prior: {prior_dir.name}")
+    print(f"{'='*64}\n")
 
 
 # ---------------------------------------------------------------------------
-# Public entry point
+# Async trial execution
+# ---------------------------------------------------------------------------
+
+async def _run_one_trial_async(
+    trial_idx: int,
+    task: dict,
+    trial_dir: Path,
+    fixture_env: dict[str, str],
+    runner: Runner,
+    model: str,
+    max_turns: int,
+    run_dir: Path,
+    graded_at: str,
+) -> tuple[Transcript, list[GraderResult]]:
+    """Run one trial: make env → run → grade → persist to trial_N/ in run_dir."""
+    trial_env = _make_trial_env(task, trial_dir, fixture_env, model, max_turns, trial_dir)
+    transcript = await runner.run(task["prompt"], trial_env)
+
+    db_path_str = fixture_env.get("FINANCE_HUB_DB", "")
+    db_path = Path(db_path_str) if db_path_str else None
+    workspace_str = fixture_env.get("FINANCE_HUB_WORKSPACE", str(trial_dir / "workspace"))
+    workspace = Path(workspace_str)
+
+    verdicts = grade(transcript, db_path, workspace, task)
+    for v in verdicts:
+        v.graded_at = graded_at
+
+    out_dir = run_dir / f"trial_{trial_idx}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    transcript.write_jsonl(out_dir / "transcript.jsonl")
+    _write_verdicts_jsonl(out_dir / "verdicts.jsonl", verdicts)
+
+    return transcript, verdicts
+
+
+async def _gather_trials(
+    task: dict,
+    trial_dirs: list[Path],
+    fixture_envs: list[dict[str, str]],
+    runner: Runner,
+    model: str,
+    max_turns: int,
+    run_dir: Path,
+    graded_at: str,
+) -> list[tuple[Transcript, list[GraderResult]]]:
+    coros = [
+        _run_one_trial_async(
+            i, task, trial_dir, fixture_env,
+            runner, model, max_turns, run_dir, graded_at,
+        )
+        for i, (trial_dir, fixture_env) in enumerate(zip(trial_dirs, fixture_envs))
+    ]
+    return list(await asyncio.gather(*coros))
+
+
+# ---------------------------------------------------------------------------
+# Public API
 # ---------------------------------------------------------------------------
 
 def run(
     task_path: Path,
     runner: Runner,
     *,
+    k: int = 3,
     model: str = "claude-sonnet-5",
     max_turns: int = 20,
     results_root: Path | None = None,
 ) -> Path:
-    """Run one task end-to-end and return the run dir path.
+    """Run k concurrent trials for a task and return the run dir path (spec §9 req 3).
 
     Steps:
       1. Parse + validate task YAML.
-      2. Create ephemeral trial dir; materialise fixture + runtime surface.
-      3. Compute prompt hash.
-      4. Run the trial via the runner seam.
-      5. Grade the transcript against the trial DB.
-      6. Write run dir: meta.json, transcript.jsonl, verdicts.jsonl.
-      7. Emit minimal report.
-      8. Clean up trial dir.
+      2. Build k fixture copies sequentially (fixture builder has global state).
+      3. Materialise runtime surface into each trial dir.
+      4. Compute prompt hash from first trial dir (same for all).
+      5. Run k trials concurrently via the runner seam.
+      6. Grade each trial while its fixture DB is still live.
+      7. Persist run dir: meta.json, trial_N/transcript.jsonl, trial_N/verdicts.jsonl.
+      8. Emit per-run report.
+      9. Clean up all trial dirs.
     """
     task = yaml.safe_load(task_path.read_text())
     _validate_task(task)
 
     task_id: str = task["id"]
     task_version: str = str(task.get("version", "1"))
+    suite: str = task.get("suite", "regression")
     now_ts = datetime.now(timezone.utc)
     run_id = f"{task_id}_{now_ts.strftime('%Y%m%d_%H%M%S')}"
 
@@ -217,40 +372,161 @@ def run(
 
     started_at = now_ts.isoformat()
 
-    with tempfile.TemporaryDirectory(prefix=f"trial_{task_id}_") as _tmp:
-        trial_dir = Path(_tmp)
+    # Build k fixtures sequentially — fixture builder modifies connection.DB_PATH globally.
+    trial_tmpdirs: list[tempfile.TemporaryDirectory] = []
+    trial_dirs: list[Path] = []
+    trial_fixture_envs: list[dict[str, str]] = []
 
-        fixture_env = _build_fixture(task["fixture"], trial_dir)
-        _materialize_runtime_surface(trial_dir)
-        prompt_hash = compute_prompt_hash(trial_dir)
+    try:
+        for i in range(k):
+            tmpdir = tempfile.TemporaryDirectory(prefix=f"trial_{task_id}_{i}_")
+            trial_tmpdirs.append(tmpdir)
+            td = Path(tmpdir.name)
+            trial_dirs.append(td)
 
-        trial_env = _make_trial_env(
-            task, trial_dir, fixture_env, model, max_turns, trial_dir
+            if task.get("fixture"):
+                fixture_env = _build_fixture(task["fixture"], td)
+            else:
+                (td / "workspace").mkdir(exist_ok=True)
+                fixture_env = {}
+            trial_fixture_envs.append(fixture_env)
+
+            _materialize_runtime_surface(td)
+
+        # Prompt hash is the same for all trials (identical runtime surface).
+        prompt_hash = compute_prompt_hash(trial_dirs[0])
+        graded_at = datetime.now(timezone.utc).isoformat()
+
+        # Run k trials concurrently (spec §9 req 3).
+        trial_results: list[tuple[Transcript, list[GraderResult]]] = asyncio.run(
+            _gather_trials(
+                task, trial_dirs, trial_fixture_envs,
+                runner, model, max_turns, run_dir, graded_at,
+            )
         )
-        transcript: Transcript = asyncio.run(runner.run(task["prompt"], trial_env))
-        finished_at = datetime.now(timezone.utc).isoformat()
+    finally:
+        for tmpdir in trial_tmpdirs:
+            tmpdir.cleanup()
 
-        transcript.write_jsonl(run_dir / "transcript.jsonl")
+    finished_at = datetime.now(timezone.utc).isoformat()
 
-        db_path = Path(fixture_env["FINANCE_HUB_DB"])
-        workspace = Path(fixture_env["FINANCE_HUB_WORKSPACE"])
-        verdicts = grade(transcript, db_path, workspace, task)
-        _write_verdicts_jsonl(run_dir / "verdicts.jsonl", verdicts)
+    all_trial_verdicts = [verdicts for _, verdicts in trial_results]
+    pass_k_result = _compute_pass_k(all_trial_verdicts)
+    pass_at_k_result = _compute_pass_at_k(all_trial_verdicts)
 
     meta = {
         "run_id": run_id,
         "task_id": task_id,
         "task_version": task_version,
+        "suite": suite,
         "model": model,
         "prompt_hash": prompt_hash,
         "fixture": task.get("fixture", ""),
         "now": task.get("now"),
+        "k": k,
         "started_at": started_at,
         "finished_at": finished_at,
-        "num_turns": transcript.num_turns,
-        "total_cost_usd": transcript.total_cost_usd,
+        "pass_k": pass_k_result,
+        "pass_at_k": pass_at_k_result,
+        "trials": [
+            {
+                "trial_idx": i,
+                "num_turns": transcript.num_turns,
+                "total_cost_usd": transcript.total_cost_usd,
+                "gate_pass": _trial_gate_pass(verdicts),
+            }
+            for i, (transcript, verdicts) in enumerate(trial_results)
+        ],
     }
     (run_dir / "meta.json").write_text(json.dumps(meta, indent=2) + "\n")
 
-    _emit_report(meta, verdicts)
+    _emit_report(meta, all_trial_verdicts, run_dir)
     return run_dir
+
+
+def regrade(
+    run_dir: Path,
+    task_path: Path,
+    db_paths: list[Path] | None = None,
+) -> list[list[GraderResult]]:
+    """Re-run graders against stored transcripts; append new rows to verdicts.jsonl.
+
+    check graders: always re-run from stored transcript.
+    sql graders: re-run only if db_paths[i] provided; verdict is 'skip' otherwise.
+
+    Satisfies spec §9 req 5: grader iteration without re-running the trial (no API call).
+    """
+    task = yaml.safe_load(task_path.read_text())
+    meta = json.loads((run_dir / "meta.json").read_text())
+    k = meta.get("k", 1)
+    graded_at = datetime.now(timezone.utc).isoformat()
+
+    all_results: list[list[GraderResult]] = []
+    for i in range(k):
+        trial_dir = run_dir / f"trial_{i}"
+        transcript = Transcript.read_jsonl(trial_dir / "transcript.jsonl")
+
+        db_path = db_paths[i] if db_paths and i < len(db_paths) else None
+        workspace = trial_dir
+
+        verdicts = grade(transcript, db_path, workspace, task)
+        for v in verdicts:
+            v.graded_at = graded_at
+
+        _append_verdicts_jsonl(trial_dir / "verdicts.jsonl", verdicts)
+        all_results.append(verdicts)
+
+    return all_results
+
+
+def emit_suite_report(results_root: Path) -> None:
+    """Print a per-task summary across all runs in results_root (spec §8.2).
+
+    Reads run dirs directly; picks the latest run per task_id. Shows pass^k /
+    pass@k per task and per-suite aggregates (regression pass^k rate, capability
+    pass@k rate).
+    """
+    if not results_root.exists():
+        print("No results found.")
+        return
+
+    latest: dict[str, dict] = {}
+    for d in sorted(results_root.iterdir()):
+        if not d.is_dir() or not (d / "meta.json").exists():
+            continue
+        meta = json.loads((d / "meta.json").read_text())
+        task_id = meta["task_id"]
+        if task_id not in latest or d.name > latest[task_id]["_dir_name"]:
+            meta["_dir_name"] = d.name
+            latest[task_id] = meta
+
+    if not latest:
+        print("No completed runs found.")
+        return
+
+    regression = [m for m in latest.values() if m.get("suite") == "regression"]
+    capability = [m for m in latest.values() if m.get("suite") == "capability"]
+
+    print(f"\n{'='*64}")
+    print("Suite Report")
+    print(f"{'='*64}")
+
+    for group_label, group in [("Regression", regression), ("Capability", capability)]:
+        if not group:
+            continue
+        is_regression = group_label == "Regression"
+        metric_key = "pass_k" if is_regression else "pass_at_k"
+        policy = "pass^k" if is_regression else "pass@k"
+
+        print(f"\n{group_label}:")
+        print(f"  {'Task':<10} {'pass^k':<10} {'pass@k':<10} {'Run'}")
+        print(f"  {'-'*60}")
+        for m in sorted(group, key=lambda x: x["task_id"]):
+            pk = "PASS" if m.get("pass_k") else "FAIL"
+            pak = "PASS" if m.get("pass_at_k") else "FAIL"
+            print(f"  {m['task_id']:<10} {pk:<10} {pak:<10} {m['run_id']}")
+        passing = sum(1 for m in group if m.get(metric_key))
+        print(f"  {'-'*60}")
+        print(f"  {policy} aggregate: {passing}/{len(group)} tasks passing")
+
+    print(f"\n{'='*64}\n")
