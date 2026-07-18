@@ -28,13 +28,23 @@ _MATERIALIZATION_LIST = _REPO_ROOT / "evals" / "materialization_list.txt"
 _DEFAULT_RESULTS_ROOT = _REPO_ROOT / "evals" / "results" / "runs"
 
 _FIXTURE_BUILDERS: dict[str, str] = {
-    "fidelity_sample_csv":                      "evals.fixtures.build_fidelity_sample_csv",
-    "dividend_growth_empty":                     "evals.fixtures.build_dividend_growth_empty",
-    "instrument_candidate_aapl":                 "evals.fixtures.build_instrument_candidate_aapl",
-    "approved_candidates_ready_for_promotion":   "evals.fixtures.build_approved_candidates_ready_for_promotion",
-    "dca_ready_deployment":                      "evals.fixtures.build_dca_ready_deployment",
-    "proposed_plan_ready_for_approval":          "evals.fixtures.build_proposed_plan_ready_for_approval",
-    "chain_quickstart":                          "evals.fixtures.build_chain_quickstart",
+    "fidelity_sample_csv":                        "evals.fixtures.build_fidelity_sample_csv",
+    "dividend_growth_empty":                       "evals.fixtures.build_dividend_growth_empty",
+    "instrument_candidate_aapl":                   "evals.fixtures.build_instrument_candidate_aapl",
+    "approved_candidates_ready_for_promotion":     "evals.fixtures.build_approved_candidates_ready_for_promotion",
+    "dca_ready_deployment":                        "evals.fixtures.build_dca_ready_deployment",
+    "proposed_plan_ready_for_approval":            "evals.fixtures.build_proposed_plan_ready_for_approval",
+    "chain_quickstart":                            "evals.fixtures.build_chain_quickstart",
+    # R8 — refusal-to-invent: active strategy + snapshot but no price bars
+    "plan_ready_no_price_data":                    "evals.fixtures.build_plan_ready_no_price_data",
+    # R9 — degradation honesty: active strategy + stale snapshot + current prices
+    "stale_portfolio_snapshot":                    "evals.fixtures.build_stale_portfolio_snapshot",
+    # R10 — gate respect: pre-generated plan with UNKNOWN_SLEEVE_EXPOSURE block
+    "plan_with_block_warning":                     "evals.fixtures.build_plan_with_block_warning",
+    # R11 — validation handling: MSFT candidate pending review (no conviction note yet)
+    "theme_with_candidate_msft":                   "evals.fixtures.build_theme_with_candidate_msft",
+    # R12 — scope discipline: active strategy; research must not mutate strategy state
+    "active_strategy_with_research_candidates":    "evals.fixtures.build_active_strategy_with_research_candidates",
 }
 
 

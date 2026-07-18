@@ -77,6 +77,14 @@ reference:
         AND length(trim(conviction_note)) > 0
       expect: 1
 
+    - id: error_handled_not_silenced
+      description: "transcript contains an is_error=true result for finance.review_instrument"
+      check: "transcript.tool_results.has_error('finance.review_instrument')"
+
+    - id: retry_with_note
+      description: "a successful review_instrument call includes a non-empty conviction_note"
+      check: "transcript.tool_inputs.field_nonempty('finance.review_instrument', 'conviction_note')"
+
   # Golden transcript path (relative to evals/)
   golden: "tasks/R11/golden/transcript.jsonl"
 

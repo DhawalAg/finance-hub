@@ -1,0 +1,10 @@
+Account Number,Account Name,Symbol,Description,Quantity,Last Price,Current Value,Cost Basis Total,Type
+X12345678,"Individual Brokerage",VTI,"Vanguard Total Stock Market ETF",25,$242.10,"$6,052.50","$4,800.00",Cash
+X12345678,"Individual Brokerage",AAPL,"Apple Inc",10,$190.50,"$1,905.00","$1,500.00",Cash
+X56789012,"Rollover IRA",QQQ,"Invesco QQQ Trust ETF",5,$480.20,"$2,401.00","$2,000.00",Margin
+X12345678,"Individual Brokerage",FCASH**,"HELD IN FCASH","1,234.56",$1.00,"$1,234.56",,Cash
+X12345678,"Individual Brokerage",,"Pending activity",,,,,$,Cash
+
+"The data and information in this spreadsheet is provided for informational purposes only. The data and information is believed to be reliable, but Fidelity does not guarantee its accuracy, completeness, or timeliness."
+
+"Date downloaded Jun-22-2026 10:30 a.m. ET"

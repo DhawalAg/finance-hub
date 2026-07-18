@@ -1,0 +1,16 @@
+{
+  "symbol": "SPY",
+  "net_assets": "612000000000",
+  "net_expense_ratio": "0.0009",
+  "asset_type": "ETF",
+  "holdings": [
+    {"symbol": "NVDA", "description": "NVIDIA CORP", "weight": "0.071"},
+    {"symbol": "AAPL", "description": "APPLE INC", "weight": "0.064"},
+    {"symbol": "MSFT", "description": "MICROSOFT CORP", "weight": "0.060"}
+  ],
+  "sectors": [
+    {"sector": "INFORMATION TECHNOLOGY", "weight": "0.312"},
+    {"sector": "FINANCIALS", "weight": "0.130"},
+    {"sector": "HEALTH CARE", "weight": "0.114"}
+  ]
+}
