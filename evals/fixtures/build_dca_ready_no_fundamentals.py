@@ -19,10 +19,9 @@ from __future__ import annotations
 
 import hashlib
 import os
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
-_REPO_ROOT = Path(__file__).parent.parent.parent
 _NOW = "2026-06-23T12:00:00+00:00"
 _SNAP_AS_OF = "2026-06-20T16:00:00+00:00"
 _PRICE_DATE = "2026-06-22"

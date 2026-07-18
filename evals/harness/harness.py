@@ -29,6 +29,10 @@ _DEFAULT_RESULTS_ROOT = _REPO_ROOT / "evals" / "results" / "runs"
 
 _FIXTURE_BUILDERS: dict[str, str] = {
     "fidelity_sample_csv": "evals.fixtures.build_fidelity_sample_csv",
+    "fetch_fundamentals_fixture": "evals.fixtures.build_fetch_fundamentals_fixture",
+    "fundamentals_eligibility": "evals.fixtures.build_fundamentals_eligibility",
+    "one_time_ready_deployment": "evals.fixtures.build_one_time_ready_deployment",
+    "dca_ready_no_fundamentals": "evals.fixtures.build_dca_ready_no_fundamentals",
 }
 
 

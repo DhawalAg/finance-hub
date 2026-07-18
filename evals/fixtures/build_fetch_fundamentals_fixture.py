@@ -11,7 +11,7 @@ the action under test for C1.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).parent.parent.parent

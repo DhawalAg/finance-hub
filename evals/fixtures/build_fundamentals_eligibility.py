@@ -16,7 +16,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).parent.parent.parent
