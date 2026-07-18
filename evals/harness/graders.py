@@ -145,15 +145,11 @@ def _make_trajectory_helpers(transcript: Transcript):
 
     def tool_call_before(first: str, second: str) -> bool:
         try:
-            fi = names.index(first)
+            first_idx = names.index(first)
         except ValueError:
             return False
-        try:
-            # find second occurrence AFTER first
-            si = next(i for i, n in enumerate(names) if n == second and i > fi)
-            return True
-        except StopIteration:
-            return False
+        # True if `second` is called at any point after the first `first` call.
+        return any(name == second and i > first_idx for i, name in enumerate(names))
 
     def tool_input(name: str, field: str = None) -> Any:
         for n, inp in reversed(calls):

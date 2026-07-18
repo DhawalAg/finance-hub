@@ -17,26 +17,11 @@ import shutil
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-from evals.fixtures._common import (
-    _CSV_SOURCE,
-    _FixedProvider,
-    daily_bars,
-    seed_context,
-)
-from evals.fixtures.build_dca_ready_deployment import _AAPL_THESIS
+from evals.fixtures._common import _CSV_SOURCE, seed_context
+from evals.fixtures.build_dca_ready_deployment import _AAPL_THESIS, _make_provider
 
 _NOW = datetime(2026, 6, 23, 12, 0, tzinfo=timezone.utc)
-_NOW_STR = "2026-06-23T12:00:00+00:00"
 _PRICE_AS_OF = date(2026, 6, 20)
-
-
-def _make_provider() -> _FixedProvider:
-    return _FixedProvider(bars_by_ticker={
-        "VTI":  daily_bars("VTI",  242_100_000, _NOW_STR, _PRICE_AS_OF),
-        "AAPL": daily_bars("AAPL", 190_500_000, _NOW_STR, _PRICE_AS_OF),
-        "QQQ":  daily_bars("QQQ",  480_200_000, _NOW_STR, _PRICE_AS_OF),
-        "SPY":  daily_bars("SPY",  540_000_000, _NOW_STR, _PRICE_AS_OF),
-    })
 
 
 def build(trial_dir: Path) -> dict[str, str]:

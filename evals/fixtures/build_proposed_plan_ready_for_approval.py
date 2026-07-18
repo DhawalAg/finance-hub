@@ -12,12 +12,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from evals.fixtures._common import (
-    _CSV_SOURCE,
-    _FixedProvider,
-    daily_bars,
-    seed_context,
-)
+from evals.fixtures._common import seed_context
 from evals.fixtures.build_dca_ready_deployment import (
     _make_provider,
     _seed_research,
@@ -26,7 +21,6 @@ from evals.fixtures.build_dca_ready_deployment import (
 )
 
 _NOW = datetime(2026, 6, 23, 12, 0, tzinfo=timezone.utc)
-_NOW_STR = "2026-06-23T12:00:00+00:00"
 _PRICE_AS_OF = date(2026, 6, 20)
 
 
