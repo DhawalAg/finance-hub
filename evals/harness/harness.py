@@ -579,15 +579,10 @@ def emit_suite_report(results_root: Path) -> None:
         print(f"\n{group_label}:")
         print(f"  {'Task':<10} {'pass^k':<10} {'pass@k':<10} {'Run'}")
         print(f"  {'-'*60}")
-        saturated_tasks = []
         for m in sorted(group, key=lambda x: x["task_id"]):
             pk = "PASS" if m.get("pass_k") else "FAIL"
             pak = "PASS" if m.get("pass_at_k") else "FAIL"
             print(f"  {m['task_id']:<10} {pk:<10} {pak:<10} {m['run_id']}")
-            if is_regression:
-                streak = _count_consecutive_passing_runs(results_root, m["task_id"])
-                if streak >= _SATURATION_THRESHOLD:
-                    saturated_tasks.append((m["task_id"], streak))
         passing = sum(1 for m in group if m.get(metric_key))
         print(f"  {'-'*60}")
         print(f"  {policy} aggregate: {passing}/{len(group)} tasks passing")
