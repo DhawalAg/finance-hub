@@ -136,7 +136,7 @@ reference:
 
     - id: approved_memo_artifact_exists
       description: "immutable approved memo written to workspace/approved/"
-      check: "workspace('approved/').glob('*.md') is non-empty"
+      check: "bool(workspace('approved/').glob('*.md'))"
 
     - id: plan_approved_at_set
       description: "fin_deployment_plans.approved_at is not null (not just status text)"
@@ -181,6 +181,7 @@ graders:
     role: gate
     detail: "finance.plan_readiness_check must appear in the transcript before
              finance.approve_deployment_plan — it is the mandatory pre-approval gate"
+    check: "tool_call_before('finance.plan_readiness_check', 'finance.approve_deployment_plan')"
   - id: trajectory.turn_count
     role: track
 

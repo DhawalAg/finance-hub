@@ -79,7 +79,7 @@ reference:
 
     - id: approved_memo_exists
       description: "approved memo written to workspace/approved/"
-      check: "workspace('approved/').glob('*plan_r6_fixture*') is non-empty"
+      check: "bool(workspace('approved/').glob('*plan_r6_fixture*'))"
 
   # Golden transcript path (relative to evals/)
   golden: "tasks/R6/golden/transcript.jsonl"
@@ -100,12 +100,14 @@ graders:
       finance.plan_readiness_check must appear in the transcript before
       finance.approve_deployment_plan — the agent must inspect readiness
       before approving, not approve blindly.
+    check: "tool_call_before('finance.plan_readiness_check', 'finance.approve_deployment_plan')"
 
   - id: trajectory.approve_called_with_confirm
     role: gate
     detail: >
       finance.approve_deployment_plan must be called with confirm=True.
       A call without confirm=True raises a ValueError and the plan is not approved.
+    check: "tool_called('finance.approve_deployment_plan') and tool_input('finance.approve_deployment_plan', 'confirm') == True"
 
 provenance: >
   Spec §10 R6 — approve a valid draft; verify status transition + memo artifact.

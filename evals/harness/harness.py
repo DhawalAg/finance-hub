@@ -28,7 +28,13 @@ _MATERIALIZATION_LIST = _REPO_ROOT / "evals" / "materialization_list.txt"
 _DEFAULT_RESULTS_ROOT = _REPO_ROOT / "evals" / "results" / "runs"
 
 _FIXTURE_BUILDERS: dict[str, str] = {
-    "fidelity_sample_csv": "evals.fixtures.build_fidelity_sample_csv",
+    "fidelity_sample_csv":                      "evals.fixtures.build_fidelity_sample_csv",
+    "dividend_growth_empty":                     "evals.fixtures.build_dividend_growth_empty",
+    "instrument_candidate_aapl":                 "evals.fixtures.build_instrument_candidate_aapl",
+    "approved_candidates_ready_for_promotion":   "evals.fixtures.build_approved_candidates_ready_for_promotion",
+    "dca_ready_deployment":                      "evals.fixtures.build_dca_ready_deployment",
+    "proposed_plan_ready_for_approval":          "evals.fixtures.build_proposed_plan_ready_for_approval",
+    "chain_quickstart":                          "evals.fixtures.build_chain_quickstart",
 }
 
 

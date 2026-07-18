@@ -131,7 +131,7 @@ reference:
 
     - id: memo_artifact_exists
       description: "memo artifact written to workspace/drafts/ (filesystem check)"
-      check: "workspace('drafts/').glob('*.md') is non-empty"
+      check: "bool(workspace('drafts/').glob('*.md'))"
 
 graders:
   - id: outcome.snapshot_imported_with_correct_as_of

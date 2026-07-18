@@ -631,3 +631,554 @@ class TestHarnessRun:
 
         assert len(created_dirs) == 1
         assert not Path(created_dirs[0]).exists(), "trial dir was not cleaned up"
+
+
+# ---------------------------------------------------------------------------
+# Fixture builders R2-R7: unit tests
+# ---------------------------------------------------------------------------
+
+TASK_R2 = REPO_ROOT / "evals" / "tasks" / "R2.yaml"
+TASK_R3 = REPO_ROOT / "evals" / "tasks" / "R3.yaml"
+TASK_R4 = REPO_ROOT / "evals" / "tasks" / "R4.yaml"
+TASK_R5 = REPO_ROOT / "evals" / "tasks" / "R5.yaml"
+TASK_R6 = REPO_ROOT / "evals" / "tasks" / "R6.yaml"
+TASK_R7 = REPO_ROOT / "evals" / "tasks" / "R7.yaml"
+
+
+class TestFixtureBuildersR2R7:
+    """Basic contracts for each new fixture builder."""
+
+    def _common_assertions(self, env: dict, tmp_path: Path) -> None:
+        assert "FINANCE_HUB_DB" in env
+        assert "FINANCE_HUB_WORKSPACE" in env
+        db_path = Path(env["FINANCE_HUB_DB"])
+        workspace = Path(env["FINANCE_HUB_WORKSPACE"])
+        assert db_path.exists()
+        assert workspace.is_dir()
+        import sqlite3
+        with sqlite3.connect(db_path) as conn:
+            tables = {r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()}
+        assert "fin_portfolio_snapshots" in tables
+        assert "fin_themes" in tables
+
+    def test_r2_builds_empty_db(self, tmp_path):
+        from evals.fixtures.build_dividend_growth_empty import build
+        env = build(tmp_path)
+        self._common_assertions(env, tmp_path)
+        import sqlite3
+        with sqlite3.connect(Path(env["FINANCE_HUB_DB"])) as conn:
+            count = conn.execute("SELECT COUNT(*) FROM fin_themes").fetchone()[0]
+        assert count == 0
+
+    def test_r2_does_not_mutate_connection_db_path(self, tmp_path):
+        from finance_hub.store import connection
+        from evals.fixtures.build_dividend_growth_empty import build
+        original = connection.DB_PATH
+        build(tmp_path)
+        assert connection.DB_PATH == original
+
+    def test_r3_builds_db_with_aapl_candidate(self, tmp_path):
+        from evals.fixtures.build_instrument_candidate_aapl import build
+        env = build(tmp_path)
+        self._common_assertions(env, tmp_path)
+        import sqlite3
+        with sqlite3.connect(Path(env["FINANCE_HUB_DB"])) as conn:
+            row = conn.execute(
+                "SELECT status FROM fin_theme_instruments "
+                "WHERE theme_key='theme_r3' AND ticker='AAPL'"
+            ).fetchone()
+        assert row is not None
+        assert row[0] == "candidate"
+        assert (Path(env["FINANCE_HUB_WORKSPACE"]) / "research" / "instruments").is_dir()
+
+    def test_r3_does_not_mutate_connection_db_path(self, tmp_path):
+        from finance_hub.store import connection
+        from evals.fixtures.build_instrument_candidate_aapl import build
+        original = connection.DB_PATH
+        build(tmp_path)
+        assert connection.DB_PATH == original
+
+    def test_r4_builds_db_with_approved_candidates(self, tmp_path):
+        from evals.fixtures.build_approved_candidates_ready_for_promotion import build
+        env = build(tmp_path)
+        self._common_assertions(env, tmp_path)
+        import sqlite3
+        with sqlite3.connect(Path(env["FINANCE_HUB_DB"])) as conn:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM fin_theme_instruments "
+                "WHERE theme_key='theme_r4' AND status='approved'"
+            ).fetchone()[0]
+        assert count == 3
+
+    def test_r4_aapl_thesis_written_to_workspace(self, tmp_path):
+        from evals.fixtures.build_approved_candidates_ready_for_promotion import build
+        env = build(tmp_path)
+        note = Path(env["FINANCE_HUB_WORKSPACE"]) / "research" / "instruments" / "AAPL.md"
+        assert note.exists()
+        assert note.stat().st_size >= 200
+
+    def test_r4_does_not_mutate_connection_db_path(self, tmp_path):
+        from finance_hub.store import connection
+        from evals.fixtures.build_approved_candidates_ready_for_promotion import build
+        original = connection.DB_PATH
+        build(tmp_path)
+        assert connection.DB_PATH == original
+
+    def test_r5_builds_db_with_snapshot_and_strategy(self, tmp_path):
+        from evals.fixtures.build_dca_ready_deployment import build
+        env = build(tmp_path)
+        self._common_assertions(env, tmp_path)
+        import sqlite3
+        with sqlite3.connect(Path(env["FINANCE_HUB_DB"])) as conn:
+            snap = conn.execute(
+                "SELECT COUNT(*) FROM fin_portfolio_snapshots "
+                "WHERE snapshot_id='snap_r5_fixture'"
+            ).fetchone()[0]
+            strat = conn.execute(
+                "SELECT status FROM fin_strategy_versions WHERE version_id='strat_r5_v1'"
+            ).fetchone()
+            bars = conn.execute(
+                "SELECT COUNT(DISTINCT ticker) FROM fin_price_bars"
+            ).fetchone()[0]
+        assert snap == 1
+        assert strat is not None and strat[0] == "active"
+        assert bars >= 3
+
+    def test_r5_does_not_mutate_connection_db_path(self, tmp_path):
+        from finance_hub.store import connection
+        from evals.fixtures.build_dca_ready_deployment import build
+        original = connection.DB_PATH
+        build(tmp_path)
+        assert connection.DB_PATH == original
+
+    def test_r6_builds_db_with_proposed_plan(self, tmp_path):
+        from evals.fixtures.build_proposed_plan_ready_for_approval import build
+        env = build(tmp_path)
+        self._common_assertions(env, tmp_path)
+        import sqlite3
+        with sqlite3.connect(Path(env["FINANCE_HUB_DB"])) as conn:
+            row = conn.execute(
+                "SELECT status FROM fin_deployment_plans WHERE plan_id='plan_r6_fixture'"
+            ).fetchone()
+        assert row is not None
+        # concentration warnings may push status to proposed_with_warnings — both are approvable
+        assert row[0] in ("proposed", "proposed_with_warnings")
+
+    def test_r6_approved_dir_starts_empty(self, tmp_path):
+        from evals.fixtures.build_proposed_plan_ready_for_approval import build
+        env = build(tmp_path)
+        approved_dir = Path(env["FINANCE_HUB_WORKSPACE"]) / "approved"
+        assert approved_dir.is_dir()
+        assert not list(approved_dir.glob("*.md")), "approved/ must start empty"
+
+    def test_r6_does_not_mutate_connection_db_path(self, tmp_path):
+        from finance_hub.store import connection
+        from evals.fixtures.build_proposed_plan_ready_for_approval import build
+        original = connection.DB_PATH
+        build(tmp_path)
+        assert connection.DB_PATH == original
+
+    def test_r7_builds_db_with_candidates_and_price_bars(self, tmp_path):
+        from evals.fixtures.build_chain_quickstart import build
+        env = build(tmp_path)
+        self._common_assertions(env, tmp_path)
+        import sqlite3
+        with sqlite3.connect(Path(env["FINANCE_HUB_DB"])) as conn:
+            cands = conn.execute(
+                "SELECT COUNT(*) FROM fin_theme_instruments "
+                "WHERE theme_key='theme_chain' AND status='candidate'"
+            ).fetchone()[0]
+            bars = conn.execute(
+                "SELECT COUNT(DISTINCT ticker) FROM fin_price_bars"
+            ).fetchone()[0]
+            snap = conn.execute(
+                "SELECT COUNT(*) FROM fin_portfolio_snapshots"
+            ).fetchone()[0]
+        assert cands == 3
+        assert bars >= 3
+        assert snap == 0  # no snapshot — agent imports it
+
+    def test_r7_csv_file_present(self, tmp_path):
+        from evals.fixtures.build_chain_quickstart import build
+        env = build(tmp_path)
+        csv_path = tmp_path / "fixture" / "fidelity_sample.csv"
+        assert csv_path.exists()
+
+    def test_r7_does_not_mutate_connection_db_path(self, tmp_path):
+        from finance_hub.store import connection
+        from evals.fixtures.build_chain_quickstart import build
+        original = connection.DB_PATH
+        build(tmp_path)
+        assert connection.DB_PATH == original
+
+
+# ---------------------------------------------------------------------------
+# Grader check-expression validation: ensure no invalid Python in check fields
+# ---------------------------------------------------------------------------
+
+class TestGraderCheckExpressionsR2R7:
+    """Verify the fixed check expressions evaluate without SyntaxError/NameError."""
+
+    def _empty_transcript(self):
+        return Transcript(events=[
+            TranscriptEvent(type="result", data={"num_turns": 0, "is_error": False}),
+        ])
+
+    def _run(self, check_expr: str, workspace=None) -> str:
+        from evals.harness.graders import _run_check_grader
+        import tempfile
+        ws = Path(tempfile.mkdtemp()) if workspace is None else workspace
+        spec = {"id": "test.check", "role": "gate", "check": check_expr}
+        result = _run_check_grader(spec, self._empty_transcript(), ws)
+        return result.verdict
+
+    def test_r5_memo_artifact_check_is_valid_python(self, tmp_path):
+        verdict = self._run("bool(workspace('drafts/').glob('*.md'))", tmp_path)
+        assert verdict in ("pass", "fail"), "should evaluate without error"
+
+    def test_r5_memo_artifact_check_passes_when_file_present(self, tmp_path):
+        (tmp_path / "drafts").mkdir()
+        (tmp_path / "drafts" / "plan_draft.md").write_text("content")
+        verdict = self._run("bool(workspace('drafts/').glob('*.md'))", tmp_path)
+        assert verdict == "pass"
+
+    def test_r5_memo_artifact_check_fails_when_empty(self, tmp_path):
+        (tmp_path / "drafts").mkdir()
+        verdict = self._run("bool(workspace('drafts/').glob('*.md'))", tmp_path)
+        assert verdict == "fail"
+
+    def test_r6_approved_memo_check_is_valid_python(self, tmp_path):
+        verdict = self._run("bool(workspace('approved/').glob('*plan_r6_fixture*'))", tmp_path)
+        assert verdict in ("pass", "fail")
+
+    def test_r7_approved_memo_check_is_valid_python(self, tmp_path):
+        verdict = self._run("bool(workspace('approved/').glob('*.md'))", tmp_path)
+        assert verdict in ("pass", "fail")
+
+    def test_r4_trajectory_promote_check_is_valid_python(self):
+        from evals.harness.graders import _run_check_grader
+        spec = {
+            "id": "trajectory.promotion_tool_used",
+            "role": "gate",
+            "check": "tool_called('finance.promote_to_strategy') and tool_input('finance.promote_to_strategy', 'confirm') == True",
+        }
+        result = _run_check_grader(spec, self._empty_transcript())
+        assert result.verdict == "fail"  # tool not in empty transcript
+
+    def test_r6_readiness_check_before_approve_is_valid_python(self):
+        from evals.harness.graders import _run_check_grader
+        spec = {
+            "id": "trajectory.readiness_check_called",
+            "role": "gate",
+            "check": "tool_call_before('finance.plan_readiness_check', 'finance.approve_deployment_plan')",
+        }
+        result = _run_check_grader(spec, self._empty_transcript())
+        assert result.verdict == "fail"
+
+    def test_r6_approve_with_confirm_check_is_valid_python(self):
+        from evals.harness.graders import _run_check_grader
+        spec = {
+            "id": "trajectory.approve_called_with_confirm",
+            "role": "gate",
+            "check": "tool_called('finance.approve_deployment_plan') and tool_input('finance.approve_deployment_plan', 'confirm') == True",
+        }
+        result = _run_check_grader(spec, self._empty_transcript())
+        assert result.verdict == "fail"
+
+
+# ---------------------------------------------------------------------------
+# Integration tests: harness.run() with real tool calls — all graders pass
+# ---------------------------------------------------------------------------
+
+import os
+from datetime import datetime, timezone
+
+
+def _runner_env_ctx(env):
+    """Return a context manager that sets process globals for mock runners."""
+    from evals.fixtures._common import seed_context
+    from pathlib import Path
+    db_p = Path(env.env["FINANCE_HUB_DB"])
+    ws_p = Path(env.env["FINANCE_HUB_WORKSPACE"])
+    now_str = env.env.get("FINANCE_HUB_NOW", "2026-06-23T12:00:00+00:00")
+    clock_dt = datetime.fromisoformat(now_str)
+    return seed_context(db_p, ws_p, clock_dt)
+
+
+def _tool_use_event(tool_id: str, tool_name: str, input_dict: dict) -> TranscriptEvent:
+    return TranscriptEvent(type="assistant", data={
+        "content": [{"type": "tool_use", "id": tool_id, "name": tool_name, "input": input_dict}],
+    })
+
+
+def _result_event() -> TranscriptEvent:
+    return TranscriptEvent(type="result", data={"num_turns": 1, "is_error": False})
+
+
+class TestHarnessRunR2:
+    def test_r2_graders_pass(self, tmp_path):
+        from evals.harness.harness import run
+        from evals.harness.runner import Runner
+
+        class R2Runner(Runner):
+            async def run(self, prompt: str, env: TrialEnv) -> Transcript:
+                with _runner_env_ctx(env):
+                    from finance_hub.research import tools as research
+                    research.set_theme(
+                        key="theme_r2", display_name="Dividend Growth", status="watching",
+                        description="Income-generating dividend growth.",
+                    )
+                    research.map_instruments(
+                        theme_key="theme_r2",
+                        instruments=[
+                            {"ticker": "JNJ", "type": "stock", "instrument_role": "single_stock"},
+                            {"ticker": "PG",  "type": "stock", "instrument_role": "single_stock"},
+                            {"ticker": "KO",  "type": "stock", "instrument_role": "single_stock"},
+                        ],
+                    )
+                    for ticker, conviction, note, rationale in [
+                        ("JNJ", 4, "Strong dividend history; Kenvue spin-off removes liability overhang",
+                         "Healthcare giant with 60+ year dividend growth track record."),
+                        ("PG",  4, "Best-in-class brand portfolio; 67-year dividend growth streak",
+                         "Consumer staples fortress with global distribution."),
+                        ("KO",  3, "Buffett core holding; franchise network is wide-moat",
+                         "Global beverage network with decades of dividend compounding."),
+                    ]:
+                        research.review_instrument(
+                            theme_key="theme_r2", ticker=ticker, status="approved",
+                            rationale=rationale, conviction=conviction, conviction_note=note,
+                        )
+                return Transcript(events=[
+                    _tool_use_event("tu_1", "finance.set_theme", {"key": "theme_r2"}),
+                    _tool_use_event("tu_2", "finance.map_instruments", {"theme_key": "theme_r2"}),
+                    _tool_use_event("tu_3", "finance.review_instrument", {"theme_key": "theme_r2", "ticker": "JNJ"}),
+                    _tool_use_event("tu_4", "finance.review_instrument", {"theme_key": "theme_r2", "ticker": "PG"}),
+                    _tool_use_event("tu_5", "finance.review_instrument", {"theme_key": "theme_r2", "ticker": "KO"}),
+                    _result_event(),
+                ])
+
+        run_dir = run(TASK_R2, R2Runner(), results_root=tmp_path / "results")
+        import json
+        verdicts = [json.loads(l) for l in (run_dir / "verdicts.jsonl").read_text().splitlines() if l]
+        failing = [v for v in verdicts if v["role"] == "gate" and v["verdict"] != "pass"]
+        assert failing == [], f"Gate graders failed for R2: {failing}"
+
+
+class TestHarnessRunR3:
+    def test_r3_graders_pass(self, tmp_path):
+        from evals.harness.harness import run
+        from evals.harness.runner import Runner
+
+        _THESIS = "# AAPL Thesis\n\n" + ("Apple is a great company. " * 20)
+
+        class R3Runner(Runner):
+            async def run(self, prompt: str, env: TrialEnv) -> Transcript:
+                with _runner_env_ctx(env):
+                    from finance_hub.research import tools as research
+                    s1 = research.upsert_source(
+                        url="https://example.com/aapl-1", title="AAPL Annual Report"
+                    )
+                    research.link_source(source_id=s1["id"], scope="instrument", key="AAPL")
+                    s2 = research.upsert_source(
+                        url="https://example.com/aapl-2", title="AAPL Yahoo Finance"
+                    )
+                    research.link_source(source_id=s2["id"], scope="instrument", key="AAPL")
+                    research.set_research_note(scope="instrument", key="AAPL", body=_THESIS)
+                return Transcript(events=[
+                    _tool_use_event("tu_1", "finance.upsert_source", {"url": "https://example.com/aapl-1"}),
+                    _tool_use_event("tu_2", "finance.link_source", {"scope": "instrument", "key": "AAPL"}),
+                    _tool_use_event("tu_3", "finance.upsert_source", {"url": "https://example.com/aapl-2"}),
+                    _tool_use_event("tu_4", "finance.link_source", {"scope": "instrument", "key": "AAPL"}),
+                    _tool_use_event("tu_5", "finance.set_research_note", {"scope": "instrument", "key": "AAPL"}),
+                    _result_event(),
+                ])
+
+        run_dir = run(TASK_R3, R3Runner(), results_root=tmp_path / "results")
+        import json
+        verdicts = [json.loads(l) for l in (run_dir / "verdicts.jsonl").read_text().splitlines() if l]
+        failing = [v for v in verdicts if v["role"] == "gate" and v["verdict"] != "pass"]
+        assert failing == [], f"Gate graders failed for R3: {failing}"
+
+
+class TestHarnessRunR4:
+    def test_r4_graders_pass(self, tmp_path):
+        from evals.harness.harness import run
+        from evals.harness.runner import Runner
+
+        class R4Runner(Runner):
+            async def run(self, prompt: str, env: TrialEnv) -> Transcript:
+                with _runner_env_ctx(env):
+                    from finance_hub.strategy import tools as strategy
+                    strategy.promote_to_strategy(
+                        version_id="strat_r4_v1",
+                        label="Core Equities v1",
+                        confirm=True,
+                        sleeves=[
+                            {"sleeve_key": "broad_market", "target_weight_pct": 70},
+                            {"sleeve_key": "single_stock", "target_weight_pct": 30},
+                        ],
+                        instruments=[
+                            {"ticker": "VTI", "primary_sleeve_key": "broad_market", "source_theme_key": "theme_r4"},
+                            {"ticker": "QQQ", "primary_sleeve_key": "broad_market", "source_theme_key": "theme_r4"},
+                            {"ticker": "AAPL", "primary_sleeve_key": "single_stock", "source_theme_key": "theme_r4"},
+                        ],
+                    )
+                return Transcript(events=[
+                    _tool_use_event("tu_1", "finance.promote_to_strategy", {
+                        "version_id": "strat_r4_v1", "confirm": True,
+                        "sleeves": [], "instruments": [],
+                    }),
+                    _result_event(),
+                ])
+
+        run_dir = run(TASK_R4, R4Runner(), results_root=tmp_path / "results")
+        import json
+        verdicts = [json.loads(l) for l in (run_dir / "verdicts.jsonl").read_text().splitlines() if l]
+        failing = [v for v in verdicts if v["role"] == "gate" and v["verdict"] != "pass"]
+        assert failing == [], f"Gate graders failed for R4: {failing}"
+
+
+class TestHarnessRunR5:
+    def test_r5_graders_pass(self, tmp_path):
+        from evals.harness.harness import run
+        from evals.harness.runner import Runner
+
+        class R5Runner(Runner):
+            async def run(self, prompt: str, env: TrialEnv) -> Transcript:
+                with _runner_env_ctx(env):
+                    from finance_hub.strategy import tools as strategy
+                    strategy.generate_deployment_plan(
+                        portfolio_snapshot_id="snap_r5_fixture",
+                        strategy_version_id="strat_r5_v1",
+                        deployable_cash="1000",
+                        dca_budget="1000",
+                        one_time_buy_budget="0",
+                    )
+                return Transcript(events=[
+                    _tool_use_event("tu_1", "finance.generate_deployment_plan", {
+                        "portfolio_snapshot_id": "snap_r5_fixture",
+                        "strategy_version_id": "strat_r5_v1",
+                        "deployable_cash": "1000",
+                    }),
+                    _result_event(),
+                ])
+
+        run_dir = run(TASK_R5, R5Runner(), results_root=tmp_path / "results")
+        import json
+        verdicts = [json.loads(l) for l in (run_dir / "verdicts.jsonl").read_text().splitlines() if l]
+        failing = [v for v in verdicts if v["role"] == "gate" and v["verdict"] != "pass"]
+        assert failing == [], f"Gate graders failed for R5: {failing}"
+
+
+class TestHarnessRunR6:
+    def test_r6_graders_pass(self, tmp_path):
+        from evals.harness.harness import run
+        from evals.harness.runner import Runner
+
+        class R6Runner(Runner):
+            async def run(self, prompt: str, env: TrialEnv) -> Transcript:
+                with _runner_env_ctx(env):
+                    from finance_hub.strategy import tools as strategy
+                    strategy.plan_readiness_check(plan_id="plan_r6_fixture")
+                    strategy.approve_deployment_plan(plan_id="plan_r6_fixture", confirm=True)
+                return Transcript(events=[
+                    _tool_use_event("tu_1", "finance.plan_readiness_check", {"plan_id": "plan_r6_fixture"}),
+                    _tool_use_event("tu_2", "finance.approve_deployment_plan", {
+                        "plan_id": "plan_r6_fixture", "confirm": True,
+                    }),
+                    _result_event(),
+                ])
+
+        run_dir = run(TASK_R6, R6Runner(), results_root=tmp_path / "results")
+        import json
+        verdicts = [json.loads(l) for l in (run_dir / "verdicts.jsonl").read_text().splitlines() if l]
+        failing = [v for v in verdicts if v["role"] == "gate" and v["verdict"] != "pass"]
+        assert failing == [], f"Gate graders failed for R6: {failing}"
+
+
+class TestHarnessRunR7:
+    def test_r7_graders_pass(self, tmp_path):
+        from evals.harness.harness import run
+        from evals.harness.runner import Runner
+
+        class R7Runner(Runner):
+            async def run(self, prompt: str, env: TrialEnv) -> Transcript:
+                with _runner_env_ctx(env):
+                    from finance_hub.ingestion import tools as ingestion
+                    from finance_hub.research import tools as research
+                    from finance_hub.strategy import tools as strategy
+
+                    # Step 1: import CSV
+                    result = ingestion.import_portfolio_csv(
+                        csv_path=str(Path(env.env["FINANCE_HUB_WORKSPACE"]).parent / "fixture" / "fidelity_sample.csv")
+                    )
+                    snapshot_id = result["snapshot_id"]
+
+                    # Step 2: approve candidates
+                    for ticker, conviction, note in [
+                        ("VTI",  4, "Core broad-market holding for DCA spine"),
+                        ("QQQ",  3, "Tech-weighted complement to VTI"),
+                        ("AAPL", 3, "Quality single-stock allocation"),
+                    ]:
+                        research.review_instrument(
+                            theme_key="theme_chain", ticker=ticker, status="approved",
+                            rationale=f"{ticker} approved for chain", conviction=conviction,
+                            conviction_note=note,
+                        )
+
+                    # Step 3: promote to active strategy
+                    strategy.promote_to_strategy(
+                        version_id="strat_chain_v1",
+                        label="Chain v1",
+                        status="active",
+                        confirm=True,
+                        sleeves=[
+                            {"sleeve_key": "broad_market", "target_weight_pct": 70},
+                            {"sleeve_key": "single_stock", "target_weight_pct": 30},
+                        ],
+                        instruments=[
+                            {"ticker": "VTI",  "primary_sleeve_key": "broad_market", "source_theme_key": "theme_chain"},
+                            {"ticker": "QQQ",  "primary_sleeve_key": "broad_market", "source_theme_key": "theme_chain"},
+                            {"ticker": "AAPL", "primary_sleeve_key": "single_stock", "source_theme_key": "theme_chain"},
+                        ],
+                    )
+
+                    # Step 4: generate plan
+                    plan = strategy.generate_deployment_plan(
+                        portfolio_snapshot_id=snapshot_id,
+                        strategy_version_id="strat_chain_v1",
+                        deployable_cash="1000",
+                        dca_budget="1000",
+                        one_time_buy_budget="0",
+                    )
+                    plan_id = plan["plan_id"]
+
+                    # Step 5: readiness check then approve
+                    strategy.plan_readiness_check(plan_id=plan_id)
+                    strategy.approve_deployment_plan(plan_id=plan_id, confirm=True)
+
+                return Transcript(events=[
+                    _tool_use_event("tu_1", "finance.import_portfolio_csv",
+                                    {"csv_path": "fixture/fidelity_sample.csv"}),
+                    _tool_use_event("tu_2", "finance.review_instrument",
+                                    {"theme_key": "theme_chain", "ticker": "VTI"}),
+                    _tool_use_event("tu_3", "finance.review_instrument",
+                                    {"theme_key": "theme_chain", "ticker": "QQQ"}),
+                    _tool_use_event("tu_4", "finance.review_instrument",
+                                    {"theme_key": "theme_chain", "ticker": "AAPL"}),
+                    _tool_use_event("tu_5", "finance.promote_to_strategy",
+                                    {"version_id": "strat_chain_v1", "confirm": True}),
+                    _tool_use_event("tu_6", "finance.generate_deployment_plan", {}),
+                    _tool_use_event("tu_7", "finance.plan_readiness_check", {"plan_id": "plan_id"}),
+                    _tool_use_event("tu_8", "finance.approve_deployment_plan",
+                                    {"plan_id": "plan_id", "confirm": True}),
+                    _result_event(),
+                ])
+
+        run_dir = run(TASK_R7, R7Runner(), results_root=tmp_path / "results")
+        import json
+        verdicts = [json.loads(l) for l in (run_dir / "verdicts.jsonl").read_text().splitlines() if l]
+        failing = [v for v in verdicts if v["role"] == "gate" and v["verdict"] != "pass"]
+        assert failing == [], f"Gate graders failed for R7: {failing}"

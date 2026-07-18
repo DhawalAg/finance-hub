@@ -146,6 +146,7 @@ graders:
       finance.promote_to_strategy must appear in the transcript with confirm=True.
       Any path that creates a strategy version without this tool is a boundary
       violation (ADR 0003) — strategy state must transition through explicit promotion.
+    check: "tool_called('finance.promote_to_strategy') and tool_input('finance.promote_to_strategy', 'confirm') == True"
 
 provenance: >
   Spec §10 R4 — promote approved candidates; verify versioned snapshot.
