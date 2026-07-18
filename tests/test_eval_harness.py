@@ -2509,3 +2509,237 @@ class TestJudgeGrader:
         judge_results = [r for r in results if r.grader_id.startswith("judge.")]
         # Should emit one row per dimension declared in R3 judge spec
         assert len(judge_results) == 3
+
+
+# ---------------------------------------------------------------------------
+# Five-version recording in meta.json (spec §7, §8.3, issue #50)
+# ---------------------------------------------------------------------------
+
+class TestFiveVersionRecording:
+    """meta.json records harness_version + fixture_version (spec §7 five-version row)."""
+
+    def _make_mock_runner(self):
+        class MockRunner(Runner):
+            async def run(self, prompt, env):
+                return _make_import_transcript()
+        return MockRunner()
+
+    def test_meta_includes_harness_version(self, tmp_path):
+        from evals.harness.harness import run, _HARNESS_VERSION
+
+        results_root = tmp_path / "results"
+        run_dir = run(TASK_R1, self._make_mock_runner(), k=1, results_root=results_root)
+        meta = json.loads((run_dir / "meta.json").read_text())
+        assert "harness_version" in meta
+        assert meta["harness_version"] == _HARNESS_VERSION
+
+    def test_meta_includes_fixture_version(self, tmp_path):
+        from evals.harness.harness import run
+
+        results_root = tmp_path / "results"
+        run_dir = run(TASK_R1, self._make_mock_runner(), k=1, results_root=results_root)
+        meta = json.loads((run_dir / "meta.json").read_text())
+        assert "fixture_version" in meta
+        assert isinstance(meta["fixture_version"], str)
+
+    def test_fixture_version_from_module_constant(self, tmp_path):
+        """Fixture builders with VERSION = '1' report '1' in meta.json."""
+        from evals.harness.harness import _get_fixture_version
+
+        version = _get_fixture_version("multi_instrument_theme_brief")
+        assert version == "1"
+
+    def test_fixture_version_defaults_to_1_if_no_constant(self, tmp_path):
+        """Older fixture builders without VERSION attribute still report '1'."""
+        from evals.harness.harness import _get_fixture_version
+
+        # fidelity_sample_csv was authored before VERSION constant was added
+        version = _get_fixture_version("fidelity_sample_csv")
+        assert version == "1"
+
+    def test_no_fixture_task_reports_na_fixture_version(self, tmp_path):
+        """Tasks without a fixture report fixture_version='n/a'."""
+        from evals.harness.harness import run
+        import yaml
+        import tempfile
+
+        task_content = {
+            "id": "T_nofixture",
+            "version": "1",
+            "suite": "regression",
+            "prompt": "Hello.",
+            "graders": [],
+        }
+        task_path = tmp_path / "T_nofixture.yaml"
+        task_path.write_text(yaml.dump(task_content))
+
+        results_root = tmp_path / "results"
+        run_dir = run(task_path, self._make_mock_runner(), k=1, results_root=results_root)
+        meta = json.loads((run_dir / "meta.json").read_text())
+        assert meta["fixture_version"] == "n/a"
+
+    def test_task_version_present_in_meta(self, tmp_path):
+        """task_version is already recorded (pre-existing; verify not broken)."""
+        from evals.harness.harness import run
+
+        results_root = tmp_path / "results"
+        run_dir = run(TASK_R1, self._make_mock_runner(), k=1, results_root=results_root)
+        meta = json.loads((run_dir / "meta.json").read_text())
+        assert "task_version" in meta
+        assert meta["task_version"] == "1"
+
+
+# ---------------------------------------------------------------------------
+# Saturation signal in emit_suite_report (spec §7, issue #50)
+# ---------------------------------------------------------------------------
+
+class TestSaturationSignal:
+    """emit_suite_report flags saturated regression tasks (spec §7)."""
+
+    def _write_fake_run(self, results_root: Path, task_id: str, n: int, pass_k: bool) -> None:
+        """Write a fake run dir for task_id with a deterministic name based on n."""
+        run_id = f"{task_id}_20260101_{n:06d}"
+        run_dir = results_root / run_id
+        run_dir.mkdir(parents=True)
+        (run_dir / "meta.json").write_text(json.dumps({
+            "run_id": run_id,
+            "task_id": task_id,
+            "task_version": "1",
+            "suite": "regression",
+            "model": "claude-sonnet-5",
+            "prompt_hash": "abc123",
+            "fixture": "",
+            "fixture_version": "1",
+            "harness_version": "2",
+            "now": None,
+            "k": 1,
+            "started_at": "2026-01-01T00:00:00+00:00",
+            "finished_at": "2026-01-01T00:01:00+00:00",
+            "pass_k": pass_k,
+            "pass_at_k": pass_k,
+            "trials": [],
+        }) + "\n")
+
+    def test_no_saturation_below_threshold(self, tmp_path, capsys):
+        from evals.harness.harness import emit_suite_report, _SATURATION_THRESHOLD
+
+        results_root = tmp_path / "results"
+        for i in range(_SATURATION_THRESHOLD - 1):
+            self._write_fake_run(results_root, "R1", i, pass_k=True)
+
+        emit_suite_report(results_root)
+        out = capsys.readouterr().out
+        assert "SATURATION" not in out
+
+    def test_saturation_signal_at_threshold(self, tmp_path, capsys):
+        from evals.harness.harness import emit_suite_report, _SATURATION_THRESHOLD
+
+        results_root = tmp_path / "results"
+        for i in range(_SATURATION_THRESHOLD):
+            self._write_fake_run(results_root, "R1", i, pass_k=True)
+
+        emit_suite_report(results_root)
+        out = capsys.readouterr().out
+        assert "SATURATION" in out
+        assert "R1" in out
+
+    def test_saturation_broken_by_failing_run(self, tmp_path, capsys):
+        from evals.harness.harness import emit_suite_report, _SATURATION_THRESHOLD
+
+        results_root = tmp_path / "results"
+        # A failing run in the middle breaks the consecutive streak
+        for i in range(_SATURATION_THRESHOLD + 2):
+            # The last run (highest i = most recent) is a failure
+            pass_k = i < (_SATURATION_THRESHOLD + 1)
+            self._write_fake_run(results_root, "R1", i, pass_k=pass_k)
+
+        emit_suite_report(results_root)
+        out = capsys.readouterr().out
+        # Most recent run failed; streak is broken at 0
+        assert "SATURATION" not in out
+
+    def test_saturation_only_checks_regression_suite(self, tmp_path, capsys):
+        from evals.harness.harness import emit_suite_report, _SATURATION_THRESHOLD
+
+        results_root = tmp_path / "results"
+        # Write many passing runs but mark them as 'capability'
+        for i in range(_SATURATION_THRESHOLD + 1):
+            run_id = f"C1_20260101_{i:06d}"
+            run_dir = results_root / run_id
+            run_dir.mkdir(parents=True)
+            (run_dir / "meta.json").write_text(json.dumps({
+                "run_id": run_id, "task_id": "C1", "task_version": "1",
+                "suite": "capability", "model": "claude-sonnet-5",
+                "prompt_hash": "abc", "fixture": "", "fixture_version": "1",
+                "harness_version": "2", "now": None, "k": 1,
+                "started_at": "2026-01-01T00:00:00+00:00",
+                "finished_at": "2026-01-01T00:01:00+00:00",
+                "pass_k": True, "pass_at_k": True, "trials": [],
+            }) + "\n")
+
+        emit_suite_report(results_root)
+        out = capsys.readouterr().out
+        assert "SATURATION" not in out
+
+
+# ---------------------------------------------------------------------------
+# C4 judge grader dispatch (issue #50)
+# ---------------------------------------------------------------------------
+
+class TestC4JudgeGraderDispatch:
+    """grade() with C4 task dispatches judge.theme_brief_quality with 3 dimensions."""
+
+    _TASK_C4 = Path(__file__).parent.parent / "evals" / "tasks" / "C4.yaml"
+
+    _FAKE_JUDGE_RESPONSE = """{
+        "coverage": {"score": 4, "justification": "Both VTI and AAPL covered."},
+        "groundedness": {"score": 3, "justification": "Most claims sourced."},
+        "cross_instrument_synthesis": {"score": 2, "justification": "Little synthesis."}
+    }"""
+
+    def test_c4_judge_grader_emits_three_skip_rows_when_gates_fail(self, tmp_path, monkeypatch):
+        """When gate graders fail, judge emits skip rows for each dimension."""
+        import yaml
+        from evals.harness import graders as graders_mod
+        from evals.harness.graders import grade
+
+        monkeypatch.setattr(graders_mod, "_invoke_judge", lambda p, m: self._FAKE_JUDGE_RESPONSE)
+
+        task = yaml.safe_load(self._TASK_C4.read_text())
+        results = grade(Transcript(), None, tmp_path, task)
+        judge_results = [r for r in results if r.grader_id.startswith("judge.")]
+        assert len(judge_results) == 3
+        assert all(r.verdict == "skip" for r in judge_results)
+
+    def test_c4_judge_grader_emits_three_rows_when_gates_pass(self, tmp_path, monkeypatch):
+        """When all gate graders pass, judge emits 3 per-dimension rows."""
+        import yaml
+        from evals.harness import graders as graders_mod
+        from evals.harness.graders import grade
+
+        monkeypatch.setattr(graders_mod, "_invoke_judge", lambda p, m: self._FAKE_JUDGE_RESPONSE)
+
+        task = yaml.safe_load(self._TASK_C4.read_text())
+        # Replace all gate graders with always-pass checks
+        task["graders"] = [
+            {"id": "outcome.always_pass", "role": "gate", "check": "True"},
+            next(g for g in task["graders"] if g["id"].startswith("judge.")),
+        ]
+        results = grade(Transcript(), None, tmp_path, task)
+        judge_results = [r for r in results if r.grader_id.startswith("judge.")]
+        assert len(judge_results) == 3
+        dim_ids = {r.grader_id.split(".")[-1] for r in judge_results}
+        assert dim_ids == {"coverage", "groundedness", "cross_instrument_synthesis"}
+
+    def test_c4_judge_rubric_loads_correctly(self, tmp_path):
+        """theme_brief_quality_v1.yaml is a valid rubric with 3 dimensions."""
+        import yaml
+        from pathlib import Path
+
+        rubric = yaml.safe_load(
+            (Path(__file__).parent.parent / "evals" / "rubrics" / "theme_brief_quality_v1.yaml")
+            .read_text()
+        )
+        assert rubric["id"] == "theme_brief_quality"
+        assert set(rubric["dimensions"].keys()) == {"coverage", "groundedness", "cross_instrument_synthesis"}
+        assert all(d.get("flag_below") == 3 for d in rubric["dimensions"].values())

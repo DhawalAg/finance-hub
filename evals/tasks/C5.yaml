@@ -1,0 +1,134 @@
+id: C5
+title: "Research: source supersession workflow — replace stale source, note updated"
+version: "1"
+suite: capability
+workflow: research
+fixture: stale_source_workflow
+  # DB seeded with AAPL in theme_c5 with one stale source link and one current link.
+  # The stale link (AAPL Q1 2024 Earnings Call) has review_after='2026-05-01',
+  # which is before the fixture now (2026-06-23) — so it appears in sources_due_for_review.
+  #
+  # What the fixture contains:
+  #   - fin_themes: theme_c5 (watching, "Research Candidates")
+  #   - fin_instruments: AAPL (stock/single_stock, approved, conviction=4)
+  #   - fin_research_source_links:
+  #       src1: active, review_after='2026-05-01' (stale — agent must supersede)
+  #       src2: active, no review_after (current — agent must preserve)
+  #   - workspace/research/instruments/AAPL.md: thesis note (pre-seeded)
+  #   - fin_fundamentals: 0 rows (fundamentals not needed for this task)
+now: "2026-06-23T12:00:00+00:00"
+
+prompt: |
+  AAPL in theme_c5 has a source link that is due for review. Your task:
+  1. Use finance.sources_due_for_review to identify which source link is stale.
+  2. Supersede the stale link using finance.supersede_source_link.
+  3. Add a replacement source using finance.upsert_source and finance.link_source.
+     (Use any plausible URL and title for the replacement, e.g. "AAPL Q2 2025 Earnings Call".)
+  4. Update the AAPL research note (workspace/research/instruments/AAPL.md) via
+     finance.set_research_note to reflect that the source was refreshed.
+
+  Report: which source was stale, what you replaced it with, and confirm the note is updated.
+
+reference:
+  description: >
+    The agent calls finance.sources_due_for_review (as_of=2026-06-23), which returns
+    one stale link: the AAPL Q1 2024 Earnings Call (review_after=2026-05-01).
+    The agent calls finance.supersede_source_link to mark it superseded. It then calls
+    finance.upsert_source + finance.link_source to add a replacement. Finally it calls
+    finance.set_research_note to update the AAPL thesis note to mention the refreshed source.
+
+  stale_source:
+    ticker: "AAPL"
+    title: "AAPL Q1 2024 Earnings Call"
+    review_after: "2026-05-01"
+
+  expected_state_after:
+    superseded_links: 1
+    active_links_aapl: 2  # replacement + current_src2
+
+  # Expected post-trial DB state
+  db_assertions:
+    - id: stale_link_superseded
+      description: "the Q1 2024 earnings link has status='superseded'"
+      sql: >
+        SELECT COUNT(*) FROM fin_research_source_links
+        WHERE scope = 'instrument' AND key = 'AAPL' AND status = 'superseded'
+      expect: 1
+
+    - id: active_links_remain
+      description: "at least 2 active links for AAPL (replacement + current)"
+      sql: >
+        SELECT CASE WHEN COUNT(*) >= 2 THEN 1 ELSE 0 END
+        FROM fin_research_source_links
+        WHERE scope = 'instrument' AND key = 'AAPL' AND status = 'active'
+      expect: 1
+
+graders:
+  - id: outcome.stale_link_superseded
+    role: gate
+    detail: "exactly 1 source link is superseded for AAPL after the trial"
+    sql: >
+      SELECT COUNT(*) FROM fin_research_source_links
+      WHERE scope = 'instrument' AND key = 'AAPL' AND status = 'superseded'
+    expect: 1
+
+  - id: outcome.active_links_remain
+    role: gate
+    detail: "at least 2 active links for AAPL after supersession + replacement"
+    sql: >
+      SELECT CASE WHEN COUNT(*) >= 2 THEN 1 ELSE 0 END
+      FROM fin_research_source_links
+      WHERE scope = 'instrument' AND key = 'AAPL' AND status = 'active'
+    expect: 1
+
+  - id: outcome.sources_due_for_review_called
+    role: gate
+    detail: "agent called finance.sources_due_for_review to identify the stale link"
+    check: >
+      tool_called('finance.sources_due_for_review')
+
+  - id: outcome.supersede_source_link_called
+    role: gate
+    detail: "agent called finance.supersede_source_link to mark the stale link superseded"
+    check: >
+      tool_called('finance.supersede_source_link')
+
+  - id: outcome.note_updated
+    role: gate
+    detail: "agent called finance.set_research_note to update the AAPL thesis after supersession"
+    check: >
+      tool_called('finance.set_research_note')
+
+  - id: trajectory.replacement_source_added
+    role: track
+    detail: "agent called finance.upsert_source + finance.link_source to add replacement (expected path)"
+
+  - id: trajectory.workflow_order_correct
+    role: track
+    detail: "sources_due_for_review called before supersede_source_link (identify then act)"
+
+provenance: >
+  Spec §10 C5 — research capability: source supersession workflow.
+  ADR 0006 (capability task): witnessed-run bar; golden transcript deferred to
+  migration-to-regression moment. Frontier expected to start low.
+  Issue #50 — Phase 4 capability frontier: C4/C5/C6/C8.
+
+ambiguity_notes:
+  - |
+    INITIAL AMBIGUITY: must the agent supersede the stale link before adding the replacement,
+    or can it add first? FIX: the trajectory.workflow_order_correct track grader notes the
+    order but does not gate. Either order is acceptable — the gate graders verify the end
+    state (superseded=1, active≥2), not the order.
+
+  - |
+    INITIAL AMBIGUITY: "update the research note" — must the note content change, or just
+    be written again? FIX: outcome.note_updated checks that set_research_note was called;
+    it does not verify the content changed. The note file already exists in the fixture
+    workspace — the agent must write it again (overwriting with updated content).
+
+  - |
+    INITIAL AMBIGUITY: could the agent call sources_due_for_review with a different as_of
+    date and miss the stale link? FIX: the stale link has review_after='2026-05-01' which
+    is before the fixture now (2026-06-23). Any call to sources_due_for_review with
+    as_of≥2026-05-01 will return it. The grader checks that the tool was called; if the
+    agent uses the wrong as_of, outcome.stale_link_superseded will gate-fail.

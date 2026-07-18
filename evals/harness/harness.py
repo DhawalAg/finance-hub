@@ -30,6 +30,12 @@ _REPO_ROOT = Path(__file__).parent.parent.parent
 _MATERIALIZATION_LIST = _REPO_ROOT / "evals" / "materialization_list.txt"
 _DEFAULT_RESULTS_ROOT = _REPO_ROOT / "evals" / "results" / "runs"
 
+# Version recorded in every meta.json so runs are self-describing across harness changes.
+_HARNESS_VERSION = "2"
+
+# Number of consecutive 100% pass^k regression runs that signals saturation (spec §7).
+_SATURATION_THRESHOLD = 5
+
 _FIXTURE_BUILDERS: dict[str, str] = {
     "fidelity_sample_csv":                        "evals.fixtures.build_fidelity_sample_csv",
     "dividend_growth_empty":                       "evals.fixtures.build_dividend_growth_empty",
@@ -53,6 +59,11 @@ _FIXTURE_BUILDERS: dict[str, str] = {
     "fundamentals_eligibility":                    "evals.fixtures.build_fundamentals_eligibility",
     "one_time_ready_deployment":                   "evals.fixtures.build_one_time_ready_deployment",
     "dca_ready_no_fundamentals":                   "evals.fixtures.build_dca_ready_no_fundamentals",
+    # C4/C5/C6/C8 — capability research/chain/skill tasks
+    "multi_instrument_theme_brief":                "evals.fixtures.build_multi_instrument_theme_brief",
+    "stale_source_workflow":                       "evals.fixtures.build_stale_source_workflow",
+    "new_theme_chain":                             "evals.fixtures.build_new_theme_chain",
+    "skill_workflow_stub":                         "evals.fixtures.build_skill_workflow_stub",
 }
 
 
@@ -112,6 +123,14 @@ def _build_fixture(fixture_name: str, trial_dir: Path) -> dict[str, str]:
         raise ValueError(f"unknown fixture: {fixture_name!r}")
     mod = importlib.import_module(_FIXTURE_BUILDERS[fixture_name])
     return mod.build(trial_dir)
+
+
+def _get_fixture_version(fixture_name: str) -> str:
+    """Return the VERSION constant from the fixture builder module (defaults to '1')."""
+    if fixture_name not in _FIXTURE_BUILDERS:
+        return "1"
+    mod = importlib.import_module(_FIXTURE_BUILDERS[fixture_name])
+    return str(getattr(mod, "VERSION", "1"))
 
 
 def _make_trial_env(
@@ -419,6 +438,7 @@ def run(
     pass_k_result = _compute_pass_k(all_trial_verdicts)
     pass_at_k_result = _compute_pass_at_k(all_trial_verdicts)
 
+    fixture_name = task.get("fixture", "")
     meta = {
         "run_id": run_id,
         "task_id": task_id,
@@ -426,7 +446,9 @@ def run(
         "suite": suite,
         "model": model,
         "prompt_hash": prompt_hash,
-        "fixture": task.get("fixture", ""),
+        "fixture": fixture_name,
+        "fixture_version": _get_fixture_version(fixture_name) if fixture_name else "n/a",
+        "harness_version": _HARNESS_VERSION,
         "now": task.get("now"),
         "k": k,
         "started_at": started_at,
@@ -484,12 +506,43 @@ def regrade(
     return all_results
 
 
+def _count_consecutive_passing_runs(results_root: Path, task_id: str) -> int:
+    """Count how many of the most-recent runs for task_id all have pass_k=True.
+
+    Walks run dirs newest-first; stops at the first non-passing run.
+    """
+    if not results_root.exists():
+        return 0
+    candidates = sorted(
+        [
+            d for d in results_root.iterdir()
+            if d.is_dir()
+            and d.name.startswith(f"{task_id}_")
+            and (d / "meta.json").exists()
+        ],
+        key=lambda d: d.name,
+        reverse=True,
+    )
+    consecutive = 0
+    for run_dir in candidates:
+        meta = json.loads((run_dir / "meta.json").read_text())
+        if meta.get("pass_k"):
+            consecutive += 1
+        else:
+            break
+    return consecutive
+
+
 def emit_suite_report(results_root: Path) -> None:
     """Print a per-task summary across all runs in results_root (spec §8.2).
 
     Reads run dirs directly; picks the latest run per task_id. Shows pass^k /
     pass@k per task and per-suite aggregates (regression pass^k rate, capability
     pass@k rate).
+
+    Saturation signal (spec §7): a regression task that has passed 100% (pass^k)
+    for _SATURATION_THRESHOLD or more consecutive runs is flagged — the regression
+    suite is saturated as a signal that the capability suite needs new tasks.
     """
     if not results_root.exists():
         print("No results found.")
@@ -526,12 +579,31 @@ def emit_suite_report(results_root: Path) -> None:
         print(f"\n{group_label}:")
         print(f"  {'Task':<10} {'pass^k':<10} {'pass@k':<10} {'Run'}")
         print(f"  {'-'*60}")
+        saturated_tasks = []
         for m in sorted(group, key=lambda x: x["task_id"]):
             pk = "PASS" if m.get("pass_k") else "FAIL"
             pak = "PASS" if m.get("pass_at_k") else "FAIL"
             print(f"  {m['task_id']:<10} {pk:<10} {pak:<10} {m['run_id']}")
+            if is_regression:
+                streak = _count_consecutive_passing_runs(results_root, m["task_id"])
+                if streak >= _SATURATION_THRESHOLD:
+                    saturated_tasks.append((m["task_id"], streak))
         passing = sum(1 for m in group if m.get(metric_key))
         print(f"  {'-'*60}")
         print(f"  {policy} aggregate: {passing}/{len(group)} tasks passing")
+
+    # Saturation signal (spec §7)
+    if regression:
+        saturated = []
+        for m in regression:
+            streak = _count_consecutive_passing_runs(results_root, m["task_id"])
+            if streak >= _SATURATION_THRESHOLD:
+                saturated.append((m["task_id"], streak))
+        if saturated:
+            print(f"\n⚠  SATURATION SIGNAL: {len(saturated)} regression task(s) passed 100% "
+                  f"for ≥{_SATURATION_THRESHOLD} consecutive runs — the capability suite "
+                  "needs new tasks (spec §7).")
+            for tid, streak in sorted(saturated):
+                print(f"   {tid}: {streak} consecutive pass^k runs")
 
     print(f"\n{'='*64}\n")

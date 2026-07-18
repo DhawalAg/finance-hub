@@ -1,0 +1,84 @@
+id: theme_brief_quality
+version: "1"
+description: >
+  Rubric for grading the quality of a multi-instrument research theme brief produced
+  by the finance agent. Applied by a pinned LLM judge (Sonnet 5 per §6.3). Scores
+  each dimension 1–5; flag threshold is any dimension < 3. Verdicts do not gate —
+  they FLAG for human review (§6.3).
+
+judge_model: "claude-sonnet-5"
+call_shape: >
+  One judge call per graded trial, returning a structured verdict with separate
+  score (1-5) and justification string per dimension. Results stored as
+  per-dimension rows in the results store regardless of call structure.
+
+dimensions:
+  coverage:
+    description: >
+      The brief addresses all instruments in the theme with substantive content.
+      Coverage means more than mentioning a ticker — each instrument should have
+      a rationale, key characteristics, and conviction context.
+    scoring:
+      5: All theme instruments are addressed with substantive, instrument-specific content.
+      4: All instruments covered; one has only a brief mention without full context.
+      3: Most instruments covered; at most one is omitted or has only a one-line mention.
+      2: Only half the theme instruments are meaningfully covered.
+      1: Fewer than half covered, or the brief is ticker-list only with no substance.
+    flag_below: 3
+
+  groundedness:
+    description: >
+      Material claims about each instrument (performance, risk, conviction rationale)
+      are grounded in sources that were cited or referenced from the finance store
+      (fin_research_source_links, fin_fundamentals). Opinions and qualitative framing
+      without factual claims do not require citations.
+    scoring:
+      5: Every material factual claim cites or references a tool result or stored source.
+      4: Nearly all claims are grounded; at most 1-2 minor facts unattributed but plausible.
+      3: Most claims grounded; a few material facts lack attribution but the brief is
+         substantially evidence-based.
+      2: Several material claims are unattributed or contradict available tool results.
+      1: Brief makes factual claims without any grounding in tool results or stored sources.
+    flag_below: 3
+
+  cross_instrument_synthesis:
+    description: >
+      The brief does more than list instruments in isolation — it synthesises themes,
+      contrasts, or relationships across the instruments in the theme. This distinguishes
+      a research brief from a collection of individual instrument summaries.
+    scoring:
+      5: Brief explicitly synthesises across instruments — shared thesis, contrasting risks,
+         complementary roles in a portfolio, or thematic coherence spanning all instruments.
+      4: Some cross-instrument perspective present; brief mostly stands as individual summaries
+         but draws at least one meaningful cross-instrument observation.
+      3: Minimal synthesis present (e.g. a single closing observation); each instrument
+         is largely treated in isolation.
+      2: No synthesis; brief is a list of isolated instrument summaries with no connective tissue.
+      1: Brief is instrument-list only with no analytical content.
+    flag_below: 3
+
+judge_instructions: >
+  You are grading a multi-instrument research theme brief produced by a finance agent.
+  The brief was written during an eval trial for theme_c4 ("Quality Compounders"),
+  which contains VTI (Vanguard Total Stock Market ETF) and AAPL (Apple Inc).
+
+  Your inputs are:
+  - The agent's text output from the trial transcript
+  - The list of instruments in theme_c4 (VTI, AAPL)
+  - Available tool results from the transcript (source links, fundamentals, theme data)
+
+  Score each dimension from 1 to 5 and provide a 1-2 sentence justification per dimension.
+  Do NOT penalise the agent for not covering topics beyond what the instruments' data supports.
+  Do NOT reward length over substance. Produce your verdict in the structured format
+  specified by the harness.
+
+  Your verdict DOES NOT determine pass/fail — it FLAGS the trial for human review if any
+  dimension is below the threshold. Score what you observe; the human reviewer decides
+  what to do with the flag.
+
+calibration_notes: >
+  Initial calibration pass at Phase 4 (spec §11). Tune the rubric until SME (Dhawal)
+  and judge mostly agree. Coverage and groundedness mirror thesis_quality_v1; the new
+  dimension is cross_instrument_synthesis which is specific to multi-instrument briefs.
+  Threshold < 3 is a first-pass choice; adjust at calibration if it produces too many
+  or too few flags on real transcripts.

@@ -430,3 +430,240 @@ class TestC7Fixture:
             "SELECT note_path FROM fin_instruments WHERE ticker = 'AAPL'"
         )
         assert note_path is not None
+
+
+# ---------------------------------------------------------------------------
+# C4: multi_instrument_theme_brief
+# ---------------------------------------------------------------------------
+
+class TestC4Fixture:
+    """C4: VTI + AAPL both approved in theme_c4 with sources + fundamentals."""
+
+    def test_build_creates_db_and_workspace(self, tmp_path):
+        from evals.fixtures.build_multi_instrument_theme_brief import build
+
+        env = build(tmp_path)
+        assert Path(env["FINANCE_HUB_DB"]).exists()
+        assert Path(env["FINANCE_HUB_WORKSPACE"]).is_dir()
+
+    def test_theme_c4_has_two_approved_instruments(self, tmp_path):
+        from evals.fixtures.build_multi_instrument_theme_brief import build
+
+        env = build(tmp_path)
+        db = Path(env["FINANCE_HUB_DB"])
+        total = _count(db, "fin_theme_instruments", "theme_key = 'theme_c4'")
+        approved = _count(db, "fin_theme_instruments", "theme_key = 'theme_c4' AND status = 'approved'")
+        assert total == 2
+        assert approved == 2
+
+    def test_fundamentals_seeded_for_both_instruments(self, tmp_path):
+        from evals.fixtures.build_multi_instrument_theme_brief import build
+
+        env = build(tmp_path)
+        db = Path(env["FINANCE_HUB_DB"])
+        aapl_n = _count(db, "fin_fundamentals", "ticker = 'AAPL'")
+        vti_n = _count(db, "fin_fundamentals", "ticker = 'VTI'")
+        assert aapl_n == 8
+        assert vti_n >= 1
+
+    def test_source_links_for_both_instruments(self, tmp_path):
+        from evals.fixtures.build_multi_instrument_theme_brief import build
+
+        env = build(tmp_path)
+        db = Path(env["FINANCE_HUB_DB"])
+        aapl_links = _count(
+            db, "fin_research_source_links",
+            "scope = 'instrument' AND key = 'AAPL' AND status = 'active'"
+        )
+        vti_links = _count(
+            db, "fin_research_source_links",
+            "scope = 'instrument' AND key = 'VTI' AND status = 'active'"
+        )
+        assert aapl_links >= 2
+        assert vti_links >= 2
+
+    def test_aapl_has_thesis_note_in_workspace(self, tmp_path):
+        from evals.fixtures.build_multi_instrument_theme_brief import build
+
+        env = build(tmp_path)
+        workspace = Path(env["FINANCE_HUB_WORKSPACE"])
+        assert (workspace / "research" / "instruments" / "AAPL.md").exists()
+
+    def test_theme_brief_workspace_dir_exists(self, tmp_path):
+        from evals.fixtures.build_multi_instrument_theme_brief import build
+
+        env = build(tmp_path)
+        workspace = Path(env["FINANCE_HUB_WORKSPACE"])
+        assert (workspace / "research").is_dir()
+
+
+# ---------------------------------------------------------------------------
+# C5: stale_source_workflow
+# ---------------------------------------------------------------------------
+
+class TestC5Fixture:
+    """C5: AAPL with one stale source link (review_after < now) to supersede."""
+
+    def test_build_creates_db_and_workspace(self, tmp_path):
+        from evals.fixtures.build_stale_source_workflow import build
+
+        env = build(tmp_path)
+        assert Path(env["FINANCE_HUB_DB"]).exists()
+        assert Path(env["FINANCE_HUB_WORKSPACE"]).is_dir()
+
+    def test_aapl_approved_in_theme(self, tmp_path):
+        from evals.fixtures.build_stale_source_workflow import build
+
+        env = build(tmp_path)
+        db = Path(env["FINANCE_HUB_DB"])
+        status = _scalar(db, "SELECT status FROM fin_theme_instruments WHERE ticker = 'AAPL' LIMIT 1")
+        assert status == "approved"
+
+    def test_aapl_has_stale_source_link(self, tmp_path):
+        """One active link with review_after before fixture now (2026-06-23)."""
+        from evals.fixtures.build_stale_source_workflow import build
+
+        env = build(tmp_path)
+        db = Path(env["FINANCE_HUB_DB"])
+        n = _count(
+            db,
+            "fin_research_source_links",
+            "scope = 'instrument' AND key = 'AAPL'"
+            " AND status = 'active' AND review_after < '2026-06-23'",
+        )
+        assert n >= 1
+
+    def test_aapl_has_current_source_link(self, tmp_path):
+        """One active link with no review_after (or future)."""
+        from evals.fixtures.build_stale_source_workflow import build
+
+        env = build(tmp_path)
+        db = Path(env["FINANCE_HUB_DB"])
+        n = _count(
+            db,
+            "fin_research_source_links",
+            "scope = 'instrument' AND key = 'AAPL' AND status = 'active'"
+            " AND (review_after IS NULL OR review_after >= '2026-06-23')",
+        )
+        assert n >= 1
+
+    def test_aapl_thesis_in_workspace(self, tmp_path):
+        from evals.fixtures.build_stale_source_workflow import build
+
+        env = build(tmp_path)
+        workspace = Path(env["FINANCE_HUB_WORKSPACE"])
+        assert (workspace / "research" / "instruments" / "AAPL.md").exists()
+
+    def test_no_superseded_links_before_trial(self, tmp_path):
+        """No links superseded at fixture time — supersession is the action under test."""
+        from evals.fixtures.build_stale_source_workflow import build
+
+        env = build(tmp_path)
+        n = _count(Path(env["FINANCE_HUB_DB"]), "fin_research_source_links", "status = 'superseded'")
+        assert n == 0
+
+
+# ---------------------------------------------------------------------------
+# C6: new_theme_chain
+# ---------------------------------------------------------------------------
+
+class TestC6Fixture:
+    """C6: fresh DB with price bars + snapshot; agent builds everything from scratch."""
+
+    def test_build_creates_db_and_workspace(self, tmp_path):
+        from evals.fixtures.build_new_theme_chain import build
+
+        env = build(tmp_path)
+        assert Path(env["FINANCE_HUB_DB"]).exists()
+        assert Path(env["FINANCE_HUB_WORKSPACE"]).is_dir()
+
+    def test_no_themes_pre_seeded(self, tmp_path):
+        from evals.fixtures.build_new_theme_chain import build
+
+        env = build(tmp_path)
+        n = _count(Path(env["FINANCE_HUB_DB"]), "fin_themes")
+        assert n == 0
+
+    def test_no_strategy_pre_seeded(self, tmp_path):
+        from evals.fixtures.build_new_theme_chain import build
+
+        env = build(tmp_path)
+        n = _count(Path(env["FINANCE_HUB_DB"]), "fin_strategy_versions")
+        assert n == 0
+
+    def test_price_bars_for_seed_instruments(self, tmp_path):
+        """Price bars for VTI + AAPL pre-seeded so the agent can plan."""
+        from evals.fixtures.build_new_theme_chain import build
+
+        env = build(tmp_path)
+        db = Path(env["FINANCE_HUB_DB"])
+        vti_bars = _count(db, "fin_price_bars", "ticker = 'VTI'")
+        aapl_bars = _count(db, "fin_price_bars", "ticker = 'AAPL'")
+        assert vti_bars >= 1
+        assert aapl_bars >= 1
+
+    def test_portfolio_snapshot_pre_seeded(self, tmp_path):
+        from evals.fixtures.build_new_theme_chain import build
+
+        env = build(tmp_path)
+        n = _count(
+            Path(env["FINANCE_HUB_DB"]),
+            "fin_portfolio_snapshots",
+            "snapshot_id = 'snap_c6_fixture'",
+        )
+        assert n == 1
+
+    def test_db_has_schema(self, tmp_path):
+        from evals.fixtures.build_new_theme_chain import build
+
+        env = build(tmp_path)
+        tables = _tables(Path(env["FINANCE_HUB_DB"]))
+        assert "fin_themes" in tables
+        assert "fin_instruments" in tables
+        assert "fin_deployment_plans" in tables
+
+
+# ---------------------------------------------------------------------------
+# C8: skill_workflow_stub
+# ---------------------------------------------------------------------------
+
+class TestC8Fixture:
+    """C8: research-queue placeholder — two unreviewed candidates in a theme."""
+
+    def test_build_creates_db_and_workspace(self, tmp_path):
+        from evals.fixtures.build_skill_workflow_stub import build
+
+        env = build(tmp_path)
+        assert Path(env["FINANCE_HUB_DB"]).exists()
+        assert Path(env["FINANCE_HUB_WORKSPACE"]).is_dir()
+
+    def test_theme_c8_exists(self, tmp_path):
+        from evals.fixtures.build_skill_workflow_stub import build
+
+        env = build(tmp_path)
+        n = _count(Path(env["FINANCE_HUB_DB"]), "fin_themes", "key = 'theme_c8'")
+        assert n == 1
+
+    def test_two_candidate_instruments(self, tmp_path):
+        """Two instruments in 'candidate' state — not yet reviewed."""
+        from evals.fixtures.build_skill_workflow_stub import build
+
+        env = build(tmp_path)
+        db = Path(env["FINANCE_HUB_DB"])
+        n = _count(db, "fin_theme_instruments", "status = 'candidate'")
+        assert n == 2
+
+    def test_no_approved_instruments(self, tmp_path):
+        from evals.fixtures.build_skill_workflow_stub import build
+
+        env = build(tmp_path)
+        n = _count(Path(env["FINANCE_HUB_DB"]), "fin_theme_instruments", "status = 'approved'")
+        assert n == 0
+
+    def test_no_strategy_exists(self, tmp_path):
+        """No strategy yet — skill workflow includes promotion if all candidates pass review."""
+        from evals.fixtures.build_skill_workflow_stub import build
+
+        env = build(tmp_path)
+        n = _count(Path(env["FINANCE_HUB_DB"]), "fin_strategy_versions")
+        assert n == 0
