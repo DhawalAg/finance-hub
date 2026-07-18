@@ -862,8 +862,17 @@ def _parse_judge_response(
     base_id = spec["id"]
     judge_version = spec.get("judge_model", rubric.get("judge_model", "unknown"))
     rubric_id = rubric.get("id", "unknown")
-    rubric_version = spec.get("rubric_version", rubric.get("version", "unknown"))
+    rubric_version = str(spec.get("rubric_version", rubric.get("version", "unknown")))
     dimensions = spec.get("dimensions", list(rubric.get("dimensions", {}).keys()))
+
+    def _meta(dim: str, **extra: Any) -> dict:
+        return {
+            "dimension": dim,
+            "rubric_id": rubric_id,
+            "rubric_version": rubric_version,
+            "judge_version": judge_version,
+            **extra,
+        }
 
     try:
         # Strip markdown code fences if present
@@ -871,22 +880,16 @@ def _parse_judge_response(
         parsed = json.loads(cleaned)
     except Exception as exc:
         # Return fail rows for all dimensions on parse error
-        results = []
-        for dim in dimensions:
-            results.append(GraderResult(
+        return [
+            GraderResult(
                 grader_id=f"{base_id}.{dim}",
                 role="flag",
                 verdict="fail",
                 detail=f"judge response parse error: {exc}",
-                actual={
-                    "dimension": dim,
-                    "rubric_id": rubric_id,
-                    "rubric_version": str(rubric_version),
-                    "judge_version": judge_version,
-                    "parse_error": str(exc),
-                },
-            ))
-        return results
+                actual=_meta(dim, parse_error=str(exc)),
+            )
+            for dim in dimensions
+        ]
 
     results = []
     for dim in dimensions:
@@ -915,13 +918,7 @@ def _parse_judge_response(
             role="flag",
             verdict=verdict,
             detail=detail,
-            actual={
-                "score": score,
-                "dimension": dim,
-                "rubric_id": rubric_id,
-                "rubric_version": str(rubric_version),
-                "judge_version": judge_version,
-            },
+            actual=_meta(dim, score=score),
         ))
 
     return results
