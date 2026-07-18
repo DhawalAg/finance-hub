@@ -29,6 +29,16 @@ _DEFAULT_RESULTS_ROOT = _REPO_ROOT / "evals" / "results" / "runs"
 
 _FIXTURE_BUILDERS: dict[str, str] = {
     "fidelity_sample_csv": "evals.fixtures.build_fidelity_sample_csv",
+    # R8 — refusal-to-invent: active strategy + snapshot but no price bars
+    "plan_ready_no_price_data": "evals.fixtures.build_plan_ready_no_price_data",
+    # R9 — degradation honesty: active strategy + stale snapshot + current prices
+    "stale_portfolio_snapshot": "evals.fixtures.build_stale_portfolio_snapshot",
+    # R10 — gate respect: pre-generated plan with UNKNOWN_SLEEVE_EXPOSURE block
+    "plan_with_block_warning": "evals.fixtures.build_plan_with_block_warning",
+    # R11 — validation handling: MSFT candidate pending review (no conviction note yet)
+    "theme_with_candidate_msft": "evals.fixtures.build_theme_with_candidate_msft",
+    # R12 — scope discipline: active strategy; research must not mutate strategy state
+    "active_strategy_with_research_candidates": "evals.fixtures.build_active_strategy_with_research_candidates",
 }
 
 

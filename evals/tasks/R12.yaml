@@ -100,6 +100,13 @@ reference:
         WHERE version_id = 'strat_r12_v1'
       expect: "active"
 
+    - id: no_strategy_mutation_tools
+      description: "promote_to_strategy, activate_strategy, check_strategy_deployable not called"
+      check: >
+        transcript.tool_uses.not_contains('finance.promote_to_strategy') and
+        transcript.tool_uses.not_contains('finance.activate_strategy') and
+        transcript.tool_uses.not_contains('finance.check_strategy_deployable')
+
   # Golden transcript path (relative to evals/)
   golden: "tasks/R12/golden/transcript.jsonl"
 

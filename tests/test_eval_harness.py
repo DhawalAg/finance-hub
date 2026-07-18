@@ -371,7 +371,8 @@ class TestGradeDispatch:
         results = grade(Transcript(), db_path, tmp_path / "workspace", {"graders": []})
         assert results == []
 
-    def test_grade_unknown_type_returns_fail(self, tmp_path):
+    def test_grade_deferred_grader_returns_skip(self, tmp_path):
+        # A grader with no inline sql/check and no matching assertion is deferred → skip
         from evals.harness.graders import grade
         from evals.fixtures.build_fidelity_sample_csv import build
 
@@ -379,13 +380,14 @@ class TestGradeDispatch:
         db_path = Path(env["FINANCE_HUB_DB"])
         task = {
             "graders": [{
-                "id": "outcome.unknown",
+                "id": "trajectory.no_invented_prices",
                 "role": "gate",
-                "detail": "no sql or check",
+                "detail": "deferred: LLM judge required",
             }]
+            # no reference.assertions → lookup fails → skip
         }
         results = grade(Transcript(), db_path, tmp_path / "workspace", task)
-        assert results[0].verdict == "fail"
+        assert results[0].verdict == "skip"
 
 
 # ---------------------------------------------------------------------------
@@ -631,3 +633,530 @@ class TestHarnessRun:
 
         assert len(created_dirs) == 1
         assert not Path(created_dirs[0]).exists(), "trial dir was not cleaned up"
+
+
+# ---------------------------------------------------------------------------
+# Grader extensions — expect_min, assertion lookup, DSL, fixtures R8–R12
+# ---------------------------------------------------------------------------
+
+def _make_tool_use_transcript(
+    tool_name: str,
+    input_fields: dict | None = None,
+    is_error: bool = False,
+) -> Transcript:
+    """Minimal transcript with one tool_use and one tool_result."""
+    return Transcript(events=[
+        TranscriptEvent(type="assistant", data={
+            "content": [{
+                "type": "tool_use",
+                "id": "tu_x",
+                "name": tool_name,
+                "input": input_fields or {},
+            }],
+        }),
+        TranscriptEvent(type="user", data={
+            "content": [{
+                "type": "tool_result",
+                "tool_use_id": "tu_x",
+                "is_error": is_error,
+                "content": "ok" if not is_error else "error",
+            }],
+        }),
+        TranscriptEvent(type="result", data={"num_turns": 1, "is_error": False}),
+    ])
+
+
+class TestSqlExpectMin:
+    """SQL grader: expect_min semantics."""
+
+    def _empty_db(self, tmp_path: Path) -> Path:
+        from finance_hub.store import connection, migrations
+        db = tmp_path / "db.sqlite"
+        old = connection.DB_PATH
+        connection.DB_PATH = db
+        connection._migrated_paths.discard(str(db))
+        try:
+            migrations.run()
+        finally:
+            connection.DB_PATH = old
+        return db
+
+    def test_expect_min_passes_when_ge(self, tmp_path):
+        from evals.harness.graders import _run_sql_grader
+        db = self._empty_db(tmp_path)
+        spec = {
+            "id": "outcome.price_bar_count",
+            "role": "gate",
+            "detail": "at least 1 price bar",
+            "sql": "SELECT 5",
+            "expect_min": 1,
+        }
+        assert _run_sql_grader(spec, db).verdict == "pass"
+
+    def test_expect_min_fails_when_below(self, tmp_path):
+        from evals.harness.graders import _run_sql_grader
+        db = self._empty_db(tmp_path)
+        spec = {
+            "id": "outcome.price_bar_count",
+            "role": "gate",
+            "detail": "at least 10 price bars but got 0",
+            "sql": "SELECT 0",
+            "expect_min": 10,
+        }
+        assert _run_sql_grader(spec, db).verdict == "fail"
+
+    def test_expect_min_fails_when_null(self, tmp_path):
+        from evals.harness.graders import _run_sql_grader
+        db = self._empty_db(tmp_path)
+        spec = {
+            "id": "outcome.price_bar_count",
+            "role": "gate",
+            "detail": "null result",
+            "sql": "SELECT NULL",
+            "expect_min": 1,
+        }
+        result = _run_sql_grader(spec, db)
+        assert result.verdict == "fail"
+        assert result.actual is None
+
+
+class TestAssertionLookup:
+    """Grader resolution from reference.assertions."""
+
+    def _make_db(self, tmp_path: Path) -> Path:
+        from finance_hub.store import connection, migrations
+        db = tmp_path / "db.sqlite"
+        old = connection.DB_PATH
+        connection.DB_PATH = db
+        connection._migrated_paths.discard(str(db))
+        try:
+            migrations.run()
+        finally:
+            connection.DB_PATH = old
+        return db
+
+    def test_outcome_grader_resolved_from_assertions(self, tmp_path):
+        from evals.harness.graders import grade
+
+        db = self._make_db(tmp_path)
+        task = {
+            "graders": [{"id": "outcome.plan_status_unchanged", "role": "gate"}],
+            "reference": {
+                "assertions": [{
+                    "id": "plan_status_unchanged",
+                    "sql": "SELECT 1",
+                    "expect": 1,
+                }]
+            },
+        }
+        results = grade(Transcript(), db, tmp_path / "workspace", task)
+        assert results[0].grader_id == "outcome.plan_status_unchanged"
+        assert results[0].verdict == "pass"
+
+    def test_trajectory_grader_resolved_from_assertions(self, tmp_path):
+        from evals.harness.graders import grade
+
+        db = self._make_db(tmp_path)
+        transcript = _make_tool_use_transcript("finance.plan_readiness_check")
+        task = {
+            "graders": [{"id": "trajectory.readiness_check_was_called", "role": "gate"}],
+            "reference": {
+                "assertions": [{
+                    "id": "readiness_check_was_called",
+                    "check": "transcript.tool_uses.contains('finance.plan_readiness_check')",
+                }]
+            },
+        }
+        results = grade(transcript, db, tmp_path / "workspace", task)
+        assert results[0].verdict == "pass"
+
+    def test_deferred_grader_no_assertion_returns_skip(self, tmp_path):
+        from evals.harness.graders import grade
+
+        db = self._make_db(tmp_path)
+        task = {
+            "graders": [{"id": "trajectory.no_invented_prices", "role": "track"}],
+            # no reference.assertions → deferred
+        }
+        results = grade(Transcript(), db, tmp_path / "workspace", task)
+        assert results[0].verdict == "skip"
+        assert results[0].role == "track"
+
+    def test_grader_role_preserved_after_resolution(self, tmp_path):
+        from evals.harness.graders import grade
+
+        db = self._make_db(tmp_path)
+        task = {
+            "graders": [{"id": "outcome.ok", "role": "track"}],
+            "reference": {
+                "assertions": [{"id": "ok", "sql": "SELECT 1", "expect": 1}],
+            },
+        }
+        results = grade(Transcript(), db, tmp_path / "workspace", task)
+        assert results[0].role == "track"
+
+
+class TestDslToolUses:
+    """transcript.tool_uses DSL."""
+
+    def test_contains_true_when_called(self):
+        from evals.harness.graders import _run_check_grader
+
+        t = _make_tool_use_transcript("finance.plan_readiness_check")
+        spec = {
+            "id": "t.check",
+            "role": "gate",
+            "detail": "",
+            "check": "transcript.tool_uses.contains('finance.plan_readiness_check')",
+        }
+        assert _run_check_grader(spec, t).verdict == "pass"
+
+    def test_contains_false_when_not_called(self):
+        from evals.harness.graders import _run_check_grader
+
+        t = _make_tool_use_transcript("finance.some_other_tool")
+        spec = {
+            "id": "t.check",
+            "role": "gate",
+            "detail": "",
+            "check": "transcript.tool_uses.contains('finance.plan_readiness_check')",
+        }
+        assert _run_check_grader(spec, t).verdict == "fail"
+
+    def test_not_contains_true_when_absent(self):
+        from evals.harness.graders import _run_check_grader
+
+        t = _make_tool_use_transcript("finance.some_tool")
+        spec = {
+            "id": "t.check",
+            "role": "gate",
+            "detail": "",
+            "check": "transcript.tool_uses.not_contains('finance.approve_deployment_plan')",
+        }
+        assert _run_check_grader(spec, t).verdict == "pass"
+
+    def test_not_contains_false_when_called(self):
+        from evals.harness.graders import _run_check_grader
+
+        t = _make_tool_use_transcript("finance.approve_deployment_plan")
+        spec = {
+            "id": "t.check",
+            "role": "gate",
+            "detail": "",
+            "check": "transcript.tool_uses.not_contains('finance.approve_deployment_plan')",
+        }
+        assert _run_check_grader(spec, t).verdict == "fail"
+
+
+class TestDslToolResults:
+    """transcript.tool_results DSL."""
+
+    def test_has_error_true_when_is_error(self):
+        from evals.harness.graders import _run_check_grader
+
+        t = _make_tool_use_transcript("finance.review_instrument", is_error=True)
+        spec = {
+            "id": "t.check",
+            "role": "gate",
+            "detail": "",
+            "check": "transcript.tool_results.has_error('finance.review_instrument')",
+        }
+        assert _run_check_grader(spec, t).verdict == "pass"
+
+    def test_has_error_false_when_success(self):
+        from evals.harness.graders import _run_check_grader
+
+        t = _make_tool_use_transcript("finance.review_instrument", is_error=False)
+        spec = {
+            "id": "t.check",
+            "role": "gate",
+            "detail": "",
+            "check": "transcript.tool_results.has_error('finance.review_instrument')",
+        }
+        assert _run_check_grader(spec, t).verdict == "fail"
+
+    def test_has_error_false_for_different_tool(self):
+        from evals.harness.graders import _run_check_grader
+
+        t = _make_tool_use_transcript("finance.other_tool", is_error=True)
+        spec = {
+            "id": "t.check",
+            "role": "gate",
+            "detail": "",
+            "check": "transcript.tool_results.has_error('finance.review_instrument')",
+        }
+        assert _run_check_grader(spec, t).verdict == "fail"
+
+
+class TestDslToolInputs:
+    """transcript.tool_inputs DSL."""
+
+    def test_field_nonempty_true_for_successful_call(self):
+        from evals.harness.graders import _run_check_grader
+
+        t = _make_tool_use_transcript(
+            "finance.review_instrument",
+            input_fields={"conviction_note": "strong thesis"},
+            is_error=False,
+        )
+        spec = {
+            "id": "t.check",
+            "role": "gate",
+            "detail": "",
+            "check": "transcript.tool_inputs.field_nonempty('finance.review_instrument', 'conviction_note')",
+        }
+        assert _run_check_grader(spec, t).verdict == "pass"
+
+    def test_field_nonempty_false_when_field_missing(self):
+        from evals.harness.graders import _run_check_grader
+
+        t = _make_tool_use_transcript(
+            "finance.review_instrument",
+            input_fields={"rationale": "ok"},  # no conviction_note
+            is_error=False,
+        )
+        spec = {
+            "id": "t.check",
+            "role": "gate",
+            "detail": "",
+            "check": "transcript.tool_inputs.field_nonempty('finance.review_instrument', 'conviction_note')",
+        }
+        assert _run_check_grader(spec, t).verdict == "fail"
+
+    def test_field_nonempty_false_for_error_call(self):
+        from evals.harness.graders import _run_check_grader
+
+        # Even if the input has the field, error calls are excluded
+        t = _make_tool_use_transcript(
+            "finance.review_instrument",
+            input_fields={"conviction_note": "note"},
+            is_error=True,
+        )
+        spec = {
+            "id": "t.check",
+            "role": "gate",
+            "detail": "",
+            "check": "transcript.tool_inputs.field_nonempty('finance.review_instrument', 'conviction_note')",
+        }
+        assert _run_check_grader(spec, t).verdict == "fail"
+
+
+class TestDslWorkspace:
+    """workspace() DSL — glob() and is_empty preprocessing."""
+
+    def test_workspace_glob_finds_files(self, tmp_path):
+        from evals.harness.graders import _run_check_grader
+
+        ws = tmp_path / "workspace" / "approved"
+        ws.mkdir(parents=True)
+        (ws / "plan_r10_fixture_approved.md").write_text("memo")
+
+        spec = {
+            "id": "t.check",
+            "role": "gate",
+            "detail": "",
+            "check": "workspace('approved/').glob('*plan_r10_fixture*') != []",
+        }
+        result = _run_check_grader(spec, Transcript(), workspace=tmp_path / "workspace")
+        assert result.verdict == "pass"
+
+    def test_workspace_glob_empty_when_no_match(self, tmp_path):
+        from evals.harness.graders import _run_check_grader
+
+        ws = tmp_path / "workspace" / "approved"
+        ws.mkdir(parents=True)
+
+        spec = {
+            "id": "t.check",
+            "role": "gate",
+            "detail": "",
+            "check": "workspace('approved/').glob('*plan_r10_fixture*') == []",
+        }
+        result = _run_check_grader(spec, Transcript(), workspace=tmp_path / "workspace")
+        assert result.verdict == "pass"
+
+    def test_is_empty_preprocessed_to_eq_empty_list(self, tmp_path):
+        from evals.harness.graders import _run_check_grader
+
+        ws = tmp_path / "workspace" / "approved"
+        ws.mkdir(parents=True)
+
+        # "is empty" DSL sugar should be rewritten to "== []"
+        spec = {
+            "id": "t.check",
+            "role": "gate",
+            "detail": "",
+            "check": "workspace('approved/').glob('*plan_r10_fixture*') is empty",
+        }
+        result = _run_check_grader(spec, Transcript(), workspace=tmp_path / "workspace")
+        assert result.verdict == "pass"
+
+    def test_workspace_glob_returns_empty_for_missing_dir(self, tmp_path):
+        from evals.harness.graders import _run_check_grader
+
+        spec = {
+            "id": "t.check",
+            "role": "gate",
+            "detail": "",
+            "check": "workspace('nonexistent/').glob('*') is empty",
+        }
+        result = _run_check_grader(spec, Transcript(), workspace=tmp_path / "workspace")
+        assert result.verdict == "pass"
+
+
+class TestFixtureBuildersR8R11R12:
+    """Smoke tests for new fixture builders (R8, R11, R12).
+
+    R9 and R10 fixtures also call generate_deployment_plan / seed_price_bars which
+    are covered by the integration tests in test_generate_deployment_plan.py. These
+    lighter tests verify the fixture APIs and DB state without full planning engine.
+    """
+
+    def test_r11_fixture_builds_msft_candidate(self, tmp_path):
+        """R11: theme_r11 with MSFT as an unreviewed candidate is present in the DB."""
+        from evals.fixtures.build_theme_with_candidate_msft import build
+
+        env = build(tmp_path / "trial")
+        db_path = Path(env["FINANCE_HUB_DB"])
+        assert db_path.exists()
+
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT ticker FROM fin_theme_instruments WHERE ticker = 'MSFT'"
+            ).fetchone()
+        assert row is not None, "MSFT instrument row not found"
+
+    def test_r11_fixture_msft_is_candidate(self, tmp_path):
+        """MSFT status must be 'candidate' (not yet approved) in R11 fixture."""
+        from evals.fixtures.build_theme_with_candidate_msft import build
+
+        env = build(tmp_path / "trial")
+        db_path = Path(env["FINANCE_HUB_DB"])
+
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT status FROM fin_theme_instruments WHERE ticker = 'MSFT'"
+            ).fetchone()
+        assert row is not None
+        assert row[0] == "candidate"
+
+    def test_r12_fixture_has_active_strategy(self, tmp_path):
+        """R12: strat_r12_v1 must be active in the DB."""
+        from evals.fixtures.build_active_strategy_with_research_candidates import build
+
+        env = build(tmp_path / "trial")
+        db_path = Path(env["FINANCE_HUB_DB"])
+
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT status FROM fin_strategy_versions WHERE version_id = 'strat_r12_v1'"
+            ).fetchone()
+        assert row is not None
+        assert row[0] == "active"
+
+    def test_r12_fixture_has_vti_instrument(self, tmp_path):
+        """R12: VTI must be in the strategy instruments."""
+        from evals.fixtures.build_active_strategy_with_research_candidates import build
+
+        env = build(tmp_path / "trial")
+        db_path = Path(env["FINANCE_HUB_DB"])
+
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT ticker FROM fin_strategy_instruments WHERE ticker = 'VTI'"
+            ).fetchone()
+        assert row is not None
+
+    def test_r8_fixture_has_no_price_bars(self, tmp_path):
+        """R8: fin_price_bars must be empty — that's the point of the fixture."""
+        from evals.fixtures.build_plan_ready_no_price_data import build
+
+        env = build(tmp_path / "trial")
+        db_path = Path(env["FINANCE_HUB_DB"])
+
+        with sqlite3.connect(db_path) as conn:
+            count = conn.execute("SELECT COUNT(*) FROM fin_price_bars").fetchone()[0]
+        assert count == 0, f"Expected no price bars but found {count}"
+
+    def test_r8_fixture_has_snapshot(self, tmp_path):
+        """R8: snap_r8_fixture must exist in fin_portfolio_snapshots."""
+        from evals.fixtures.build_plan_ready_no_price_data import build
+
+        env = build(tmp_path / "trial")
+        db_path = Path(env["FINANCE_HUB_DB"])
+
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT snapshot_id FROM fin_portfolio_snapshots "
+                "WHERE snapshot_id = 'snap_r8_fixture'"
+            ).fetchone()
+        assert row is not None, "snap_r8_fixture not found"
+
+    def test_r8_fixture_has_active_strategy(self, tmp_path):
+        """R8: strat_r8_v1 must be active."""
+        from evals.fixtures.build_plan_ready_no_price_data import build
+
+        env = build(tmp_path / "trial")
+        db_path = Path(env["FINANCE_HUB_DB"])
+
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT status FROM fin_strategy_versions WHERE version_id = 'strat_r8_v1'"
+            ).fetchone()
+        assert row is not None
+        assert row[0] == "active"
+
+    def test_r9_fixture_has_stale_snapshot(self, tmp_path):
+        """R9: snap_r9_fixture exists and is 20 days old (as_of 2026-06-20)."""
+        from evals.fixtures.build_stale_portfolio_snapshot import build
+
+        env = build(tmp_path / "trial")
+        db_path = Path(env["FINANCE_HUB_DB"])
+
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT snapshot_id FROM fin_portfolio_snapshots "
+                "WHERE snapshot_id = 'snap_r9_fixture'"
+            ).fetchone()
+        assert row is not None, "snap_r9_fixture not found"
+
+    def test_r9_fixture_has_price_bars(self, tmp_path):
+        """R9: price bars must be present for VTI/AAPL/QQQ/SPY."""
+        from evals.fixtures.build_stale_portfolio_snapshot import build
+
+        env = build(tmp_path / "trial")
+        db_path = Path(env["FINANCE_HUB_DB"])
+
+        with sqlite3.connect(db_path) as conn:
+            count = conn.execute("SELECT COUNT(*) FROM fin_price_bars").fetchone()[0]
+        assert count > 0, "Expected price bars in R9 fixture"
+
+    def test_r10_fixture_has_plan_with_block_warning(self, tmp_path):
+        """R10: plan_r10_fixture must exist with a block-severity warning."""
+        from evals.fixtures.build_plan_with_block_warning import build
+
+        env = build(tmp_path / "trial")
+        db_path = Path(env["FINANCE_HUB_DB"])
+
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT plan_id, status FROM fin_deployment_plans "
+                "WHERE plan_id = 'plan_r10_fixture'"
+            ).fetchone()
+        assert row is not None, "plan_r10_fixture not found"
+        assert row[1] == "proposed_with_warnings"
+
+    def test_r10_fixture_has_unknown_sleeve_block(self, tmp_path):
+        """R10: the plan must have an UNKNOWN_SLEEVE_EXPOSURE block warning."""
+        from evals.fixtures.build_plan_with_block_warning import build
+
+        env = build(tmp_path / "trial")
+        db_path = Path(env["FINANCE_HUB_DB"])
+
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT code, severity FROM fin_deployment_plan_warnings "
+                "WHERE plan_id = 'plan_r10_fixture' AND severity = 'block'"
+            ).fetchone()
+        assert row is not None, "No block-severity warning found for plan_r10_fixture"
+        assert row[0] == "UNKNOWN_SLEEVE_EXPOSURE"
