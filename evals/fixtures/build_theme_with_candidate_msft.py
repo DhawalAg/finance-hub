@@ -22,37 +22,31 @@ def build(trial_dir: Path) -> dict[str, str]:
     """
     from finance_hub import factories
     from finance_hub.research import tools as research
-    from finance_hub.store import connection, migrations
+    from finance_hub.store import migrations
+    from evals.fixtures._helpers import use_db
 
     trial_dir.mkdir(parents=True, exist_ok=True)
     workspace = trial_dir / "workspace"
     workspace.mkdir(exist_ok=True)
 
     db_path = trial_dir / "db.sqlite"
-    old_db = connection.DB_PATH
-    old_migrated = frozenset(connection._migrated_paths)
-
-    connection.DB_PATH = db_path
-    connection._migrated_paths.discard(str(db_path))
-
     factories.reset()
 
     try:
-        migrations.run()
+        with use_db(db_path):
+            migrations.run()
 
-        research.set_theme(key="theme_r11", display_name="Cloud Growth", status="watching")
-        research.map_instruments(
-            theme_key="theme_r11",
-            instruments=[{
-                "ticker": "MSFT",
-                "type": "stock",
-                "instrument_role": "single_stock",
-                "display_name": "Microsoft Corp",
-            }],
-        )
+            research.set_theme(key="theme_r11", display_name="Cloud Growth", status="watching")
+            research.map_instruments(
+                theme_key="theme_r11",
+                instruments=[{
+                    "ticker": "MSFT",
+                    "type": "stock",
+                    "instrument_role": "single_stock",
+                    "display_name": "Microsoft Corp",
+                }],
+            )
     finally:
-        connection.DB_PATH = old_db
-        connection._migrated_paths = set(old_migrated)
         factories.reset()
 
     return {

@@ -35,12 +35,13 @@ def build(trial_dir: Path) -> dict[str, str]:
     from finance_hub import factories
     from finance_hub.research import tools as research
     from finance_hub.strategy import memo, tools as strategy
-    from finance_hub.store import connection, migrations
+    from finance_hub.store import migrations
     from evals.fixtures._helpers import (
         copy_fidelity_csv,
         import_snapshot_as,
         rename_plan_id,
         seed_price_bars,
+        use_db,
     )
 
     trial_dir.mkdir(parents=True, exist_ok=True)
@@ -48,84 +49,79 @@ def build(trial_dir: Path) -> dict[str, str]:
     workspace.mkdir(exist_ok=True)
 
     db_path = trial_dir / "db.sqlite"
-    old_db = connection.DB_PATH
-    old_migrated = frozenset(connection._migrated_paths)
-    connection.DB_PATH = db_path
-    connection._migrated_paths.discard(str(db_path))
     factories.reset()
 
     try:
-        migrations.run()
+        with use_db(db_path):
+            migrations.run()
 
-        research.set_theme(key="theme_r10", display_name="Balanced Core", status="watching")
-        research.map_instruments(
-            theme_key="theme_r10",
-            instruments=[
-                {
-                    "ticker": "VTI",
-                    "type": "etf",
-                    "instrument_role": "broad_market_etf",
-                    "display_name": "Vanguard Total Stock Market ETF",
-                },
-                {
-                    "ticker": "AAPL",
-                    "type": "stock",
-                    "instrument_role": "single_stock",
-                    "display_name": "Apple Inc",
-                },
-            ],
-        )
-        research.review_instrument(
-            theme_key="theme_r10",
-            ticker="VTI",
-            status="approved",
-            rationale="Broad market ETF — total market at lowest cost",
-            conviction=5,
-            conviction_note="Total market ETF; essential DCA backbone",
-        )
-        research.review_instrument(
-            theme_key="theme_r10",
-            ticker="AAPL",
-            status="approved",
-            rationale="Services growth offsets hardware saturation; strong FCF",
-            conviction=4,
-            conviction_note="Services flywheel + premium hardware position; recurring revenue moat",
-        )
-        research.set_research_note(
-            scope="instrument",
-            key="AAPL",
-            body="# AAPL Thesis\nServices segment generating recurring revenue. "
-                "Premium hardware ecosystem with high switching costs.",
-        )
-        src1 = research.upsert_source(
-            url="https://example.com/aapl-services-r10",
-            title="AAPL Services Growth Thesis",
-        )
-        research.link_source(source_id=src1["id"], scope="instrument", key="AAPL")
-        src2 = research.upsert_source(
-            url="https://example.com/aapl-earnings-r10",
-            title="AAPL Q2 2026 Earnings",
-        )
-        research.link_source(source_id=src2["id"], scope="instrument", key="AAPL")
+            research.set_theme(key="theme_r10", display_name="Balanced Core", status="watching")
+            research.map_instruments(
+                theme_key="theme_r10",
+                instruments=[
+                    {
+                        "ticker": "VTI",
+                        "type": "etf",
+                        "instrument_role": "broad_market_etf",
+                        "display_name": "Vanguard Total Stock Market ETF",
+                    },
+                    {
+                        "ticker": "AAPL",
+                        "type": "stock",
+                        "instrument_role": "single_stock",
+                        "display_name": "Apple Inc",
+                    },
+                ],
+            )
+            research.review_instrument(
+                theme_key="theme_r10",
+                ticker="VTI",
+                status="approved",
+                rationale="Broad market ETF — total market at lowest cost",
+                conviction=5,
+                conviction_note="Total market ETF; essential DCA backbone",
+            )
+            research.review_instrument(
+                theme_key="theme_r10",
+                ticker="AAPL",
+                status="approved",
+                rationale="Services growth offsets hardware saturation; strong FCF",
+                conviction=4,
+                conviction_note="Services flywheel + premium hardware position; recurring revenue moat",
+            )
+            research.set_research_note(
+                scope="instrument",
+                key="AAPL",
+                body="# AAPL Thesis\nServices segment generating recurring revenue. "
+                    "Premium hardware ecosystem with high switching costs.",
+            )
+            src1 = research.upsert_source(
+                url="https://example.com/aapl-services-r10",
+                title="AAPL Services Growth Thesis",
+            )
+            research.link_source(source_id=src1["id"], scope="instrument", key="AAPL")
+            src2 = research.upsert_source(
+                url="https://example.com/aapl-earnings-r10",
+                title="AAPL Q2 2026 Earnings",
+            )
+            research.link_source(source_id=src2["id"], scope="instrument", key="AAPL")
 
-        strategy.promote_to_strategy(
-            version_id="strat_r10_v1",
-            label="Balanced Core",
-            sleeves=[
-                {"sleeve_key": "broad_market", "target_weight_pct": 70},
-                {"sleeve_key": "single_stock", "target_weight_pct": 30},
-            ],
-            instruments=[
-                {"ticker": "VTI", "primary_sleeve_key": "broad_market", "source_theme_key": "theme_r10"},
-                {"ticker": "AAPL", "primary_sleeve_key": "single_stock", "source_theme_key": "theme_r10"},
-            ],
-            confirm=True,
-        )
-        strategy.activate_strategy(version_id="strat_r10_v1", confirm=True)
+            strategy.promote_to_strategy(
+                version_id="strat_r10_v1",
+                label="Balanced Core",
+                sleeves=[
+                    {"sleeve_key": "broad_market", "target_weight_pct": 70},
+                    {"sleeve_key": "single_stock", "target_weight_pct": 30},
+                ],
+                instruments=[
+                    {"ticker": "VTI", "primary_sleeve_key": "broad_market", "source_theme_key": "theme_r10"},
+                    {"ticker": "AAPL", "primary_sleeve_key": "single_stock", "source_theme_key": "theme_r10"},
+                ],
+                confirm=True,
+            )
+            strategy.activate_strategy(version_id="strat_r10_v1", confirm=True)
 
     finally:
-        connection.DB_PATH = old_db
-        connection._migrated_paths = set(old_migrated)
         factories.reset()
 
     # Import snapshot (CSV includes QQQ which is NOT in the strategy → block warning)
@@ -154,11 +150,6 @@ def build(trial_dir: Path) -> dict[str, str]:
     # Generate deployment plan — UNKNOWN_SLEEVE_EXPOSURE block fires because QQQ is unmapped
     old_workspace_root = memo.WORKSPACE_ROOT
     memo.WORKSPACE_ROOT = workspace
-
-    old_db2 = connection.DB_PATH
-    old_migrated2 = frozenset(connection._migrated_paths)
-    connection.DB_PATH = db_path
-    connection._migrated_paths.discard(str(db_path))
     factories.reset()
     # Use task's `now` so snapshot is 3 days old (fresh band — no staleness warning)
     factories._clock = factories._FixedClock(
@@ -166,18 +157,17 @@ def build(trial_dir: Path) -> dict[str, str]:
     )
 
     try:
-        result = strategy.generate_deployment_plan(
-            portfolio_snapshot_id="snap_r10_fixture",
-            strategy_version_id="strat_r10_v1",
-            deployable_cash="1000",
-            dca_budget="1000",
-            requested_output_mode="deployment_draft",
-        )
-        raw_plan_id = result["plan_id"]
+        with use_db(db_path):
+            result = strategy.generate_deployment_plan(
+                portfolio_snapshot_id="snap_r10_fixture",
+                strategy_version_id="strat_r10_v1",
+                deployable_cash="1000",
+                dca_budget="1000",
+                requested_output_mode="deployment_draft",
+            )
+            raw_plan_id = result["plan_id"]
     finally:
         memo.WORKSPACE_ROOT = old_workspace_root
-        connection.DB_PATH = old_db2
-        connection._migrated_paths = set(old_migrated2)
         factories.reset()
 
     # Rename the auto-generated plan_id to the deterministic ID the task expects

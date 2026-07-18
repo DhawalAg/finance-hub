@@ -29,13 +29,13 @@ def build(trial_dir: Path) -> dict[str, str]:
     from finance_hub import factories
     from finance_hub.research import tools as research
     from finance_hub.strategy import tools as strategy
-    from finance_hub.store import connection, migrations
+    from finance_hub.store import migrations
     from evals.fixtures._helpers import (
         copy_fidelity_csv,
         import_snapshot_as,
-        run_migrations,
         seed_metrics,
         seed_price_bars,
+        use_db,
     )
 
     trial_dir.mkdir(parents=True, exist_ok=True)
@@ -43,99 +43,94 @@ def build(trial_dir: Path) -> dict[str, str]:
     workspace.mkdir(exist_ok=True)
 
     db_path = trial_dir / "db.sqlite"
-    old_db = connection.DB_PATH
-    old_migrated = frozenset(connection._migrated_paths)
-    connection.DB_PATH = db_path
-    connection._migrated_paths.discard(str(db_path))
     factories.reset()
 
     try:
-        migrations.run()
+        with use_db(db_path):
+            migrations.run()
 
-        research.set_theme(key="theme_r9", display_name="Core Balanced", status="watching")
-        research.map_instruments(
-            theme_key="theme_r9",
-            instruments=[
-                {
-                    "ticker": "VTI",
-                    "type": "etf",
-                    "instrument_role": "broad_market_etf",
-                    "display_name": "Vanguard Total Stock Market ETF",
-                },
-                {
-                    "ticker": "QQQ",
-                    "type": "etf",
-                    "instrument_role": "broad_market_etf",
-                    "display_name": "Invesco QQQ Trust ETF",
-                },
-                {
-                    "ticker": "AAPL",
-                    "type": "stock",
-                    "instrument_role": "single_stock",
-                    "display_name": "Apple Inc",
-                },
-            ],
-        )
-        research.review_instrument(
-            theme_key="theme_r9",
-            ticker="VTI",
-            status="approved",
-            rationale="Total market core holding",
-            conviction=5,
-            conviction_note="Total market ETF — lowest cost broad market exposure",
-        )
-        research.review_instrument(
-            theme_key="theme_r9",
-            ticker="QQQ",
-            status="approved",
-            rationale="Tech-tilted ETF for growth sleeve",
-            conviction=3,
-            conviction_note="Acceptable tech concentration; diversified within growth sleeve",
-        )
-        research.review_instrument(
-            theme_key="theme_r9",
-            ticker="AAPL",
-            status="approved",
-            rationale="Services growth offsets hardware saturation; strong FCF",
-            conviction=4,
-            conviction_note="Services flywheel + premium hardware position; recurring revenue moat",
-        )
-        research.set_research_note(
-            scope="instrument",
-            key="AAPL",
-            body="# AAPL Thesis\nServices segment generating recurring revenue. "
-                "Premium hardware ecosystem with high switching costs.",
-        )
-        src1 = research.upsert_source(
-            url="https://example.com/aapl-services-r9",
-            title="AAPL Services Growth Thesis",
-        )
-        research.link_source(source_id=src1["id"], scope="instrument", key="AAPL")
-        src2 = research.upsert_source(
-            url="https://example.com/aapl-earnings-r9",
-            title="AAPL Q2 2026 Earnings",
-        )
-        research.link_source(source_id=src2["id"], scope="instrument", key="AAPL")
+            research.set_theme(key="theme_r9", display_name="Core Balanced", status="watching")
+            research.map_instruments(
+                theme_key="theme_r9",
+                instruments=[
+                    {
+                        "ticker": "VTI",
+                        "type": "etf",
+                        "instrument_role": "broad_market_etf",
+                        "display_name": "Vanguard Total Stock Market ETF",
+                    },
+                    {
+                        "ticker": "QQQ",
+                        "type": "etf",
+                        "instrument_role": "broad_market_etf",
+                        "display_name": "Invesco QQQ Trust ETF",
+                    },
+                    {
+                        "ticker": "AAPL",
+                        "type": "stock",
+                        "instrument_role": "single_stock",
+                        "display_name": "Apple Inc",
+                    },
+                ],
+            )
+            research.review_instrument(
+                theme_key="theme_r9",
+                ticker="VTI",
+                status="approved",
+                rationale="Total market core holding",
+                conviction=5,
+                conviction_note="Total market ETF — lowest cost broad market exposure",
+            )
+            research.review_instrument(
+                theme_key="theme_r9",
+                ticker="QQQ",
+                status="approved",
+                rationale="Tech-tilted ETF for growth sleeve",
+                conviction=3,
+                conviction_note="Acceptable tech concentration; diversified within growth sleeve",
+            )
+            research.review_instrument(
+                theme_key="theme_r9",
+                ticker="AAPL",
+                status="approved",
+                rationale="Services growth offsets hardware saturation; strong FCF",
+                conviction=4,
+                conviction_note="Services flywheel + premium hardware position; recurring revenue moat",
+            )
+            research.set_research_note(
+                scope="instrument",
+                key="AAPL",
+                body="# AAPL Thesis\nServices segment generating recurring revenue. "
+                    "Premium hardware ecosystem with high switching costs.",
+            )
+            src1 = research.upsert_source(
+                url="https://example.com/aapl-services-r9",
+                title="AAPL Services Growth Thesis",
+            )
+            research.link_source(source_id=src1["id"], scope="instrument", key="AAPL")
+            src2 = research.upsert_source(
+                url="https://example.com/aapl-earnings-r9",
+                title="AAPL Q2 2026 Earnings",
+            )
+            research.link_source(source_id=src2["id"], scope="instrument", key="AAPL")
 
-        strategy.promote_to_strategy(
-            version_id="strat_r9_v1",
-            label="Core Balanced",
-            sleeves=[
-                {"sleeve_key": "broad_market", "target_weight_pct": 70},
-                {"sleeve_key": "single_stock", "target_weight_pct": 30},
-            ],
-            instruments=[
-                {"ticker": "VTI", "primary_sleeve_key": "broad_market", "source_theme_key": "theme_r9"},
-                {"ticker": "QQQ", "primary_sleeve_key": "broad_market", "source_theme_key": "theme_r9"},
-                {"ticker": "AAPL", "primary_sleeve_key": "single_stock", "source_theme_key": "theme_r9"},
-            ],
-            confirm=True,
-        )
-        strategy.activate_strategy(version_id="strat_r9_v1", confirm=True)
+            strategy.promote_to_strategy(
+                version_id="strat_r9_v1",
+                label="Core Balanced",
+                sleeves=[
+                    {"sleeve_key": "broad_market", "target_weight_pct": 70},
+                    {"sleeve_key": "single_stock", "target_weight_pct": 30},
+                ],
+                instruments=[
+                    {"ticker": "VTI", "primary_sleeve_key": "broad_market", "source_theme_key": "theme_r9"},
+                    {"ticker": "QQQ", "primary_sleeve_key": "broad_market", "source_theme_key": "theme_r9"},
+                    {"ticker": "AAPL", "primary_sleeve_key": "single_stock", "source_theme_key": "theme_r9"},
+                ],
+                confirm=True,
+            )
+            strategy.activate_strategy(version_id="strat_r9_v1", confirm=True)
 
     finally:
-        connection.DB_PATH = old_db
-        connection._migrated_paths = set(old_migrated)
         factories.reset()
 
     # Import snapshot (20 days before now=2026-07-10 → stale band 15-30 days)

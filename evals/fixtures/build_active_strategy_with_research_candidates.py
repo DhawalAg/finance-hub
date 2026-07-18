@@ -27,63 +27,57 @@ def build(trial_dir: Path) -> dict[str, str]:
     from finance_hub import factories
     from finance_hub.research import tools as research
     from finance_hub.strategy import tools as strategy
-    from finance_hub.store import connection, migrations
+    from finance_hub.store import migrations
+    from evals.fixtures._helpers import use_db
 
     trial_dir.mkdir(parents=True, exist_ok=True)
     workspace = trial_dir / "workspace"
     workspace.mkdir(exist_ok=True)
 
     db_path = trial_dir / "db.sqlite"
-    old_db = connection.DB_PATH
-    old_migrated = frozenset(connection._migrated_paths)
-
-    connection.DB_PATH = db_path
-    connection._migrated_paths.discard(str(db_path))
-
     factories.reset()
 
     try:
-        migrations.run()
+        with use_db(db_path):
+            migrations.run()
 
-        research.set_theme(
-            key="theme_r12_core",
-            display_name="Core Holdings",
-            status="watching",
-        )
-        research.map_instruments(
-            theme_key="theme_r12_core",
-            instruments=[{
-                "ticker": "VTI",
-                "type": "etf",
-                "instrument_role": "broad_market_etf",
-                "display_name": "Vanguard Total Stock Market ETF",
-            }],
-        )
-        research.review_instrument(
-            theme_key="theme_r12_core",
-            ticker="VTI",
-            status="approved",
-            rationale="Core holding — total market at lowest cost",
-            conviction=5,
-            conviction_note="Total market at lowest cost",
-        )
+            research.set_theme(
+                key="theme_r12_core",
+                display_name="Core Holdings",
+                status="watching",
+            )
+            research.map_instruments(
+                theme_key="theme_r12_core",
+                instruments=[{
+                    "ticker": "VTI",
+                    "type": "etf",
+                    "instrument_role": "broad_market_etf",
+                    "display_name": "Vanguard Total Stock Market ETF",
+                }],
+            )
+            research.review_instrument(
+                theme_key="theme_r12_core",
+                ticker="VTI",
+                status="approved",
+                rationale="Core holding — total market at lowest cost",
+                conviction=5,
+                conviction_note="Total market at lowest cost",
+            )
 
-        strategy.promote_to_strategy(
-            version_id="strat_r12_v1",
-            label="Established Core",
-            sleeves=[{"sleeve_key": "broad_market", "target_weight_pct": 100}],
-            instruments=[{
-                "ticker": "VTI",
-                "primary_sleeve_key": "broad_market",
-                "source_theme_key": "theme_r12_core",
-            }],
-            confirm=True,
-        )
-        strategy.activate_strategy(version_id="strat_r12_v1", confirm=True)
+            strategy.promote_to_strategy(
+                version_id="strat_r12_v1",
+                label="Established Core",
+                sleeves=[{"sleeve_key": "broad_market", "target_weight_pct": 100}],
+                instruments=[{
+                    "ticker": "VTI",
+                    "primary_sleeve_key": "broad_market",
+                    "source_theme_key": "theme_r12_core",
+                }],
+                confirm=True,
+            )
+            strategy.activate_strategy(version_id="strat_r12_v1", confirm=True)
 
     finally:
-        connection.DB_PATH = old_db
-        connection._migrated_paths = set(old_migrated)
         factories.reset()
 
     return {

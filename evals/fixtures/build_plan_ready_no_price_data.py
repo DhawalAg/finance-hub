@@ -31,11 +31,11 @@ def build(trial_dir: Path) -> dict[str, str]:
     from finance_hub import factories
     from finance_hub.research import tools as research
     from finance_hub.strategy import tools as strategy
-    from finance_hub.store import connection, migrations
+    from finance_hub.store import migrations
     from evals.fixtures._helpers import (
         copy_fidelity_csv,
         import_snapshot_as,
-        run_migrations,
+        use_db,
     )
 
     trial_dir.mkdir(parents=True, exist_ok=True)
@@ -43,90 +43,85 @@ def build(trial_dir: Path) -> dict[str, str]:
     workspace.mkdir(exist_ok=True)
 
     db_path = trial_dir / "db.sqlite"
-    old_db = connection.DB_PATH
-    old_migrated = frozenset(connection._migrated_paths)
-    connection.DB_PATH = db_path
-    connection._migrated_paths.discard(str(db_path))
     factories.reset()
 
     try:
-        migrations.run()
+        with use_db(db_path):
+            migrations.run()
 
-        # Step 2-3: research theme + instruments
-        research.set_theme(key="theme_r8", display_name="Core Growth", status="watching")
-        research.map_instruments(
-            theme_key="theme_r8",
-            instruments=[
-                {
-                    "ticker": "VTI",
-                    "type": "etf",
-                    "instrument_role": "broad_market_etf",
-                    "display_name": "Vanguard Total Stock Market ETF",
-                },
-                {
-                    "ticker": "AAPL",
-                    "type": "stock",
-                    "instrument_role": "single_stock",
-                    "display_name": "Apple Inc",
-                },
-            ],
-        )
+            # Step 2-3: research theme + instruments
+            research.set_theme(key="theme_r8", display_name="Core Growth", status="watching")
+            research.map_instruments(
+                theme_key="theme_r8",
+                instruments=[
+                    {
+                        "ticker": "VTI",
+                        "type": "etf",
+                        "instrument_role": "broad_market_etf",
+                        "display_name": "Vanguard Total Stock Market ETF",
+                    },
+                    {
+                        "ticker": "AAPL",
+                        "type": "stock",
+                        "instrument_role": "single_stock",
+                        "display_name": "Apple Inc",
+                    },
+                ],
+            )
 
-        # Step 4: approve both with conviction (AAPL needs conviction_note for single_stock)
-        research.review_instrument(
-            theme_key="theme_r8",
-            ticker="VTI",
-            status="approved",
-            rationale="Broad market ETF — total market at lowest cost",
-            conviction=5,
-            conviction_note="Total market ETF; essential DCA backbone",
-        )
-        research.review_instrument(
-            theme_key="theme_r8",
-            ticker="AAPL",
-            status="approved",
-            rationale="Services growth offsets hardware saturation; strong FCF",
-            conviction=4,
-            conviction_note="Services flywheel + premium hardware position; recurring revenue moat",
-        )
+            # Step 4: approve both with conviction (AAPL needs conviction_note for single_stock)
+            research.review_instrument(
+                theme_key="theme_r8",
+                ticker="VTI",
+                status="approved",
+                rationale="Broad market ETF — total market at lowest cost",
+                conviction=5,
+                conviction_note="Total market ETF; essential DCA backbone",
+            )
+            research.review_instrument(
+                theme_key="theme_r8",
+                ticker="AAPL",
+                status="approved",
+                rationale="Services growth offsets hardware saturation; strong FCF",
+                conviction=4,
+                conviction_note="Services flywheel + premium hardware position; recurring revenue moat",
+            )
 
-        # Step 5: AAPL thesis note + citations (required for single_stock DCA eligibility)
-        research.set_research_note(
-            scope="instrument",
-            key="AAPL",
-            body="# AAPL Thesis\nServices segment generating recurring revenue. "
-                "Premium hardware ecosystem with high switching costs.",
-        )
-        src1 = research.upsert_source(
-            url="https://example.com/aapl-services-thesis",
-            title="AAPL Services Growth Thesis",
-        )
-        research.link_source(source_id=src1["id"], scope="instrument", key="AAPL")
-        src2 = research.upsert_source(
-            url="https://example.com/aapl-q2-earnings",
-            title="AAPL Q2 2026 Earnings",
-        )
-        research.link_source(source_id=src2["id"], scope="instrument", key="AAPL")
+            # Step 5: AAPL thesis note + citations (required for single_stock DCA eligibility)
+            research.set_research_note(
+                scope="instrument",
+                key="AAPL",
+                body="# AAPL Thesis\nServices segment generating recurring revenue. "
+                    "Premium hardware ecosystem with high switching costs.",
+            )
+            src1 = research.upsert_source(
+                url="https://example.com/aapl-services-thesis",
+                title="AAPL Services Growth Thesis",
+            )
+            research.link_source(source_id=src1["id"], scope="instrument", key="AAPL")
+            src2 = research.upsert_source(
+                url="https://example.com/aapl-q2-earnings",
+                title="AAPL Q2 2026 Earnings",
+            )
+            research.link_source(source_id=src2["id"], scope="instrument", key="AAPL")
 
-        # Step 6-7: strategy
-        strategy.promote_to_strategy(
-            version_id="strat_r8_v1",
-            label="Core Growth",
-            sleeves=[
-                {"sleeve_key": "broad_market", "target_weight_pct": 70},
-                {"sleeve_key": "single_stock", "target_weight_pct": 30},
-            ],
-            instruments=[
-                {"ticker": "VTI", "primary_sleeve_key": "broad_market", "source_theme_key": "theme_r8"},
-                {"ticker": "AAPL", "primary_sleeve_key": "single_stock", "source_theme_key": "theme_r8"},
-            ],
-            confirm=True,
-        )
-        strategy.activate_strategy(version_id="strat_r8_v1", confirm=True)
+            # Step 6-7: strategy
+            strategy.promote_to_strategy(
+                version_id="strat_r8_v1",
+                label="Core Growth",
+                sleeves=[
+                    {"sleeve_key": "broad_market", "target_weight_pct": 70},
+                    {"sleeve_key": "single_stock", "target_weight_pct": 30},
+                ],
+                instruments=[
+                    {"ticker": "VTI", "primary_sleeve_key": "broad_market", "source_theme_key": "theme_r8"},
+                    {"ticker": "AAPL", "primary_sleeve_key": "single_stock", "source_theme_key": "theme_r8"},
+                ],
+                confirm=True,
+            )
+            strategy.activate_strategy(version_id="strat_r8_v1", confirm=True)
 
     finally:
-        connection.DB_PATH = old_db
-        connection._migrated_paths = set(old_migrated)
         factories.reset()
 
     # Step 8: import snapshot (outside the inner connection context)

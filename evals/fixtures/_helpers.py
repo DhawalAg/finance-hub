@@ -3,27 +3,40 @@ from __future__ import annotations
 
 import shutil
 import sqlite3
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Any
 
 _CSV_SOURCE = Path(__file__).parent.parent.parent / "tests" / "fixtures" / "fidelity_positions_sample.csv"
 
 
-def run_migrations(db_path: Path) -> None:
-    """Run finance-hub migrations on a fresh DB, restoring global DB_PATH after."""
-    from finance_hub.store import connection, migrations
+@contextmanager
+def use_db(db_path: Path):
+    """Point finance-hub's global DB_PATH at db_path for the duration of the block.
 
-    old = connection.DB_PATH
+    Restores the previous DB_PATH and migration-cache state on exit, so fixture
+    builders never leak connection state into other trials.
+    """
+    from finance_hub.store import connection
+
+    old_path = connection.DB_PATH
     old_migrated = frozenset(connection._migrated_paths)
     connection.DB_PATH = db_path
     connection._migrated_paths.discard(str(db_path))
     try:
-        migrations.run()
+        yield
     finally:
-        connection.DB_PATH = old
+        connection.DB_PATH = old_path
         connection._migrated_paths = set(old_migrated)
+
+
+def run_migrations(db_path: Path) -> None:
+    """Run finance-hub migrations on a fresh DB, restoring global DB_PATH after."""
+    from finance_hub.store import migrations
+
+    with use_db(db_path):
+        migrations.run()
 
 
 def copy_fidelity_csv(trial_dir: Path) -> Path:
@@ -46,21 +59,11 @@ def import_snapshot_as(
     Returns the target_snapshot_id.
     Uses raw sqlite3 (FK off) for the rename so the PK update succeeds.
     """
-    from finance_hub import factories
-    from finance_hub.store import connection
     from finance_hub.ingestion import tools as ingestion
 
-    old = connection.DB_PATH
-    old_migrated = frozenset(connection._migrated_paths)
-    connection.DB_PATH = db_path
-    connection._migrated_paths.discard(str(db_path))
-
-    try:
+    with use_db(db_path):
         result = ingestion.import_portfolio_csv(csv_path=str(csv_path), as_of=as_of)
         old_id = result["snapshot_id"]
-    finally:
-        connection.DB_PATH = old
-        connection._migrated_paths = set(old_migrated)
 
     if old_id != target_snapshot_id:
         with sqlite3.connect(db_path) as conn:
@@ -110,7 +113,6 @@ def seed_price_bars(
     """
     from finance_hub import factories
     from finance_hub.market_data.tools import DailyBarEnvelope, snapshot
-    from finance_hub.store import connection
 
     now_str = as_of_date.isoformat() + "T12:00:00+00:00"
 
@@ -158,15 +160,10 @@ def seed_price_bars(
     provider = _FixedProvider(bars_by_ticker=bars_by_ticker)
     factories.set_price_provider(provider)
 
-    old = connection.DB_PATH
-    old_migrated = frozenset(connection._migrated_paths)
-    connection.DB_PATH = db_path
-    connection._migrated_paths.discard(str(db_path))
     try:
-        snapshot(tickers, as_of=as_of_date)
+        with use_db(db_path):
+            snapshot(tickers, as_of=as_of_date)
     finally:
-        connection.DB_PATH = old
-        connection._migrated_paths = set(old_migrated)
         factories.reset()
 
 
@@ -180,26 +177,18 @@ def seed_metrics(
     from finance_hub.market_data import metrics as M
     from finance_hub.store import connection
 
-    old = connection.DB_PATH
-    old_migrated = frozenset(connection._migrated_paths)
-    connection.DB_PATH = db_path
-    connection._migrated_paths.discard(str(db_path))
-    try:
-        with connection.connect() as conn:
-            spy_series = M.series_from_bars(conn, benchmark_ticker, "yfinance", as_of_date)
-            for ticker in tickers:
-                series = M.series_from_bars(conn, ticker, "yfinance", as_of_date)
-                if not series:
-                    continue
-                mv = M.compute_ticker_metrics(
-                    series,
-                    ticker=ticker,
-                    as_of=as_of_date,
-                    source="yfinance",
-                    benchmark_series=spy_series,
-                    benchmark_ticker=benchmark_ticker,
-                )
-                M.store_metrics(conn, mv)
-    finally:
-        connection.DB_PATH = old
-        connection._migrated_paths = set(old_migrated)
+    with use_db(db_path), connection.connect() as conn:
+        spy_series = M.series_from_bars(conn, benchmark_ticker, "yfinance", as_of_date)
+        for ticker in tickers:
+            series = M.series_from_bars(conn, ticker, "yfinance", as_of_date)
+            if not series:
+                continue
+            mv = M.compute_ticker_metrics(
+                series,
+                ticker=ticker,
+                as_of=as_of_date,
+                source="yfinance",
+                benchmark_series=spy_series,
+                benchmark_ticker=benchmark_ticker,
+            )
+            M.store_metrics(conn, mv)
