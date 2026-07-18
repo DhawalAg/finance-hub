@@ -380,9 +380,9 @@ class TestGradeDispatch:
         db_path = Path(env["FINANCE_HUB_DB"])
         task = {
             "graders": [{
-                "id": "trajectory.no_invented_prices",
+                "id": "outcome.some_future_grader",
                 "role": "gate",
-                "detail": "deferred: LLM judge required",
+                "detail": "deferred: no assertion registered yet",
             }]
             # no reference.assertions → lookup fails → skip
         }
@@ -1321,16 +1321,18 @@ class TestAssertionLookup:
         results = grade(transcript, db, tmp_path / "workspace", task)
         assert results[0].verdict == "pass"
 
-    def test_deferred_grader_no_assertion_returns_skip(self, tmp_path):
+    def test_built_in_trajectory_grader_runs_without_assertion(self, tmp_path):
+        # Known trajectory handlers (issue #45) run even without reference.assertions.
         from evals.harness.graders import grade
 
         db = self._make_db(tmp_path)
         task = {
             "graders": [{"id": "trajectory.no_invented_prices", "role": "track"}],
-            # no reference.assertions → deferred
+            # no reference.assertions — built-in handler runs directly
         }
         results = grade(Transcript(), db, tmp_path / "workspace", task)
-        assert results[0].verdict == "skip"
+        # Empty transcript has no financial numbers → passes groundedness check
+        assert results[0].verdict == "pass"
         assert results[0].role == "track"
 
     def test_grader_role_preserved_after_resolution(self, tmp_path):
