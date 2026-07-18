@@ -6,6 +6,7 @@ Grader types dispatched from task YAML grader specs:
   sql        — run SQL against the trial DB; compare result to `expect` (==) or `expect_min` (>=)
   check      — evaluate a Python expression against the transcript + workspace
   trajectory — built-in transcript-pattern graders dispatched by ID suffix
+  judge.*    — LLM-judge grader; runs only on gate-passing trials; returns per-dimension rows
 
 Helpers available in check expressions:
   tool_result(name)                     — last tool result dict for the named tool
@@ -26,11 +27,14 @@ Verdict composition (spec §6.4):
 Grader spec resolution order:
   1. If the spec has inline `sql` or `check`, use it directly.
   2. If the id starts with `trajectory.`, dispatch to the built-in handler.
-  3. Otherwise strip the namespace prefix and look up in reference.assertions.
-  4. If still not found: judge.* → skip (Phase 3); others → skip (deferred).
+  3. If the id starts with `judge.`, dispatch to the LLM-judge handler (§6.3).
+  4. Otherwise strip the namespace prefix and look up in reference.assertions.
+  5. If still not found: others → skip (deferred).
 """
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
 import json
 import re
 import sqlite3
@@ -38,7 +42,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator
 
+import yaml
+
 from evals.harness.runner import Transcript
+
+_REPO_ROOT = Path(__file__).parent.parent.parent
+_EVALS_ROOT = _REPO_ROOT / "evals"
 
 
 @dataclass
@@ -725,6 +734,232 @@ def _run_trajectory_grader(spec: dict, transcript: Transcript) -> GraderResult:
 
 
 # ---------------------------------------------------------------------------
+# LLM-judge grader (spec §6.3)
+# ---------------------------------------------------------------------------
+
+def _invoke_judge(prompt: str, judge_model: str) -> str:
+    """Call the LLM judge via Agent SDK; returns the raw response text.
+
+    Runs the async SDK call in a fresh thread with its own event loop so that
+    grade() remains synchronous even when called from inside an asyncio event
+    loop (e.g. from _run_one_trial_async inside harness.run).
+    """
+    async def _call() -> str:
+        from claude_agent_sdk import query, ClaudeAgentOptions, AssistantMessage, TextBlock
+        options = ClaudeAgentOptions(
+            model=judge_model,
+            max_turns=1,
+            setting_sources=[],
+        )
+        text_parts: list[str] = []
+        async for msg in query(prompt=prompt, options=options):
+            if isinstance(msg, AssistantMessage):
+                for block in msg.content:
+                    if isinstance(block, TextBlock):
+                        text_parts.append(block.text)
+        return "".join(text_parts)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(asyncio.run, _call())
+        return future.result()
+
+
+def _load_rubric(rubric_relpath: str) -> dict:
+    """Load a versioned rubric YAML; path is relative to evals/."""
+    rubric_path = _EVALS_ROOT / rubric_relpath
+    return yaml.safe_load(rubric_path.read_text())
+
+
+def _collect_judge_context(workspace: Path | None, db_path: Path | None) -> dict:
+    """Collect note text and source data from workspace + DB for the judge prompt."""
+    notes: dict[str, str] = {}
+    if workspace:
+        research_dir = workspace / "research"
+        if research_dir.exists():
+            for md_file in research_dir.rglob("*.md"):
+                rel = md_file.relative_to(workspace)
+                notes[str(rel)] = md_file.read_text()
+
+    sources: list[dict] = []
+    if db_path and db_path.exists():
+        try:
+            with sqlite3.connect(db_path) as conn:
+                rows = conn.execute(
+                    "SELECT rs.id, rs.url, rs.title FROM fin_research_sources rs "
+                    "JOIN fin_research_source_links rl ON rs.id = rl.source_id "
+                    "WHERE rl.status = 'active'"
+                ).fetchall()
+                sources = [{"id": r[0], "url": r[1], "title": r[2]} for r in rows]
+        except Exception:
+            pass
+
+    return {"notes": notes, "sources": sources}
+
+
+def _build_judge_prompt(rubric: dict, context: dict, spec: dict) -> str:
+    """Build the judge prompt from rubric, workspace context, and grader spec."""
+    lines: list[str] = []
+
+    instructions = rubric.get("judge_instructions", "").strip()
+    if instructions:
+        lines.append(instructions)
+        lines.append("")
+
+    lines.append("## Thesis Note(s)")
+    if context["notes"]:
+        for path, text in context["notes"].items():
+            lines.append(f"\n### {path}")
+            lines.append(text)
+    else:
+        lines.append("(no note files found in workspace/research/)")
+
+    lines.append("\n## Registered Sources")
+    if context["sources"]:
+        for src in context["sources"]:
+            url_str = f" — {src['url']}" if src.get("url") else ""
+            title_str = src.get("title") or "(no title)"
+            lines.append(f"- ID {src['id']}: {title_str}{url_str}")
+    else:
+        lines.append("(no sources registered)")
+
+    coverage_key_facts = spec.get("coverage_key_facts", [])
+    if coverage_key_facts:
+        lines.append("\n## Coverage Key Facts Required")
+        for i, fact in enumerate(coverage_key_facts, 1):
+            lines.append(f"{i}. {fact}")
+
+    dimensions = spec.get("dimensions", list(rubric.get("dimensions", {}).keys()))
+    lines.append("\n## Scoring Instructions")
+    for dim in dimensions:
+        dim_rubric = rubric.get("dimensions", {}).get(dim, {})
+        desc = dim_rubric.get("description", "").strip()
+        flag_below = dim_rubric.get("flag_below", 3)
+        lines.append(f"\n**{dim}** (score 1–5; flag_below={flag_below}): {desc}")
+        scoring = dim_rubric.get("scoring", {})
+        for score_val in sorted(scoring.keys(), reverse=True):
+            lines.append(f"  {score_val}: {scoring[score_val]}")
+
+    dim_list = json.dumps({d: {"score": "1-5", "justification": "..."} for d in dimensions}, indent=2)
+    lines.append(f"""
+## Required Output Format
+
+Respond with ONLY a JSON object (no prose, no code fences):
+{dim_list}
+""")
+    return "\n".join(lines)
+
+
+def _parse_judge_response(
+    response: str,
+    rubric: dict,
+    spec: dict,
+) -> list[GraderResult]:
+    """Parse the judge's JSON response into per-dimension GraderResult rows.
+
+    Always returns one row per dimension. On parse error, returns fail rows with
+    an error detail so the human reviewer can investigate.
+    """
+    base_id = spec["id"]
+    judge_version = spec.get("judge_model", rubric.get("judge_model", "unknown"))
+    rubric_id = rubric.get("id", "unknown")
+    rubric_version = spec.get("rubric_version", rubric.get("version", "unknown"))
+    dimensions = spec.get("dimensions", list(rubric.get("dimensions", {}).keys()))
+
+    try:
+        # Strip markdown code fences if present
+        cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", response.strip(), flags=re.MULTILINE)
+        parsed = json.loads(cleaned)
+    except Exception as exc:
+        # Return fail rows for all dimensions on parse error
+        results = []
+        for dim in dimensions:
+            results.append(GraderResult(
+                grader_id=f"{base_id}.{dim}",
+                role="flag",
+                verdict="fail",
+                detail=f"judge response parse error: {exc}",
+                actual={
+                    "dimension": dim,
+                    "rubric_id": rubric_id,
+                    "rubric_version": str(rubric_version),
+                    "judge_version": judge_version,
+                    "parse_error": str(exc),
+                },
+            ))
+        return results
+
+    results = []
+    for dim in dimensions:
+        dim_rubric = rubric.get("dimensions", {}).get(dim, {})
+        flag_below = dim_rubric.get("flag_below", 3)
+        dim_data = parsed.get(dim, {})
+
+        score = dim_data.get("score")
+        justification = dim_data.get("justification", "")
+
+        if score is None:
+            verdict = "fail"
+            detail = f"dimension '{dim}' missing from judge response"
+        else:
+            try:
+                score = int(score)
+                verdict = "pass" if score >= flag_below else "fail"
+                detail = str(justification)
+            except (TypeError, ValueError):
+                verdict = "fail"
+                detail = f"invalid score {score!r} for dimension '{dim}'"
+                score = None
+
+        results.append(GraderResult(
+            grader_id=f"{base_id}.{dim}",
+            role="flag",
+            verdict=verdict,
+            detail=detail,
+            actual={
+                "score": score,
+                "dimension": dim,
+                "rubric_id": rubric_id,
+                "rubric_version": str(rubric_version),
+                "judge_version": judge_version,
+            },
+        ))
+
+    return results
+
+
+def _run_judge_grader(
+    spec: dict,
+    transcript: Transcript,
+    workspace: Path | None,
+    db_path: Path | None,
+) -> list[GraderResult]:
+    """Run the LLM-judge grader; return per-dimension GraderResult rows (spec §6.3)."""
+    rubric_relpath = spec.get("rubric", "")
+    dimensions = spec.get("dimensions", [])
+
+    try:
+        rubric = _load_rubric(rubric_relpath)
+    except Exception as exc:
+        return [
+            GraderResult(
+                grader_id=f"{spec['id']}.{dim}",
+                role="flag",
+                verdict="fail",
+                detail=f"rubric load error: {exc}",
+                actual={"dimension": dim, "rubric_load_error": str(exc)},
+            )
+            for dim in dimensions
+        ]
+
+    context = _collect_judge_context(workspace, db_path)
+    prompt = _build_judge_prompt(rubric, context, spec)
+    judge_model = spec.get("judge_model", rubric.get("judge_model", "claude-sonnet-5"))
+
+    response = _invoke_judge(prompt, judge_model)
+    return _parse_judge_response(response, rubric, spec)
+
+
+# ---------------------------------------------------------------------------
 # Verdict composition (spec §6.4)
 # ---------------------------------------------------------------------------
 
@@ -755,67 +990,99 @@ def compose_verdict(results: list[GraderResult]) -> ComposedVerdict:
 # Public entry point
 # ---------------------------------------------------------------------------
 
+def _run_one_grader(
+    spec: dict,
+    transcript: Transcript,
+    db_path: Path | None,
+    workspace: Path | None,
+    task: dict,
+) -> GraderResult:
+    """Dispatch a single non-judge grader spec and return one GraderResult."""
+    gid = spec.get("id", "unknown")
+    role = spec.get("role", "gate")
+
+    if "sql" in spec:
+        return _run_sql_grader(spec, db_path)
+    if "check" in spec:
+        return _run_check_grader(spec, transcript, workspace)
+    if gid.startswith("trajectory."):
+        suffix = gid.split(".", 1)[-1]
+        if suffix in _TRAJECTORY_HANDLERS:
+            return _run_trajectory_grader(spec, transcript)
+        resolved = _resolve_spec(spec, task)
+        if resolved is not None and "check" in resolved:
+            return _run_check_grader(resolved, transcript, workspace)
+        if resolved is not None and "sql" in resolved:
+            return _run_sql_grader(resolved, db_path)
+        return GraderResult(
+            grader_id=gid, role=role, verdict="fail",
+            detail=spec.get("detail", ""),
+            actual=f"unknown trajectory grader: {suffix!r}",
+        )
+
+    resolved = _resolve_spec(spec, task)
+    if resolved is None:
+        return GraderResult(
+            grader_id=gid,
+            role=role,
+            verdict="skip",
+            detail=spec.get("detail", ""),
+            actual="deferred: no assertion registered for this grader",
+        )
+    if "sql" in resolved:
+        return _run_sql_grader(resolved, db_path)
+    if "check" in resolved:
+        return _run_check_grader(resolved, transcript, workspace)
+    return GraderResult(
+        grader_id=resolved.get("id", "unknown"),
+        role=resolved.get("role", "gate"),
+        verdict="fail",
+        detail=resolved.get("detail", ""),
+        actual="unknown grader type: no 'sql' or 'check' field",
+    )
+
+
 def grade(
     transcript: Transcript,
     db_path: Path | None,
     workspace: Path,
     task: dict,
 ) -> list[GraderResult]:
-    """Apply all graders for a task and return verdicts (spec §9 req 4)."""
-    results = []
+    """Apply all graders for a task and return verdicts (spec §9 req 4).
+
+    Processing order (spec §6.3):
+      1. Run all non-judge graders first (deterministic gates, trajectories, etc.).
+      2. Check whether all gate verdicts are 'pass'.
+      3. If gates pass: run each judge.* grader, extending results with per-dimension rows.
+         If gates fail: emit skip rows for each judge.* grader's declared dimensions.
+    """
+    results: list[GraderResult] = []
+    judge_specs: list[dict] = []
+
     for spec in task.get("graders", []):
         gid = spec.get("id", "unknown")
-        role = spec.get("role", "gate")
-
-        if "sql" in spec:
-            results.append(_run_sql_grader(spec, db_path))
-        elif "check" in spec:
-            results.append(_run_check_grader(spec, transcript, workspace))
-        elif gid.startswith("trajectory."):
-            suffix = gid.split(".", 1)[-1]
-            if suffix in _TRAJECTORY_HANDLERS:
-                results.append(_run_trajectory_grader(spec, transcript))
-            else:
-                # Unknown suffix: fall back to assertion lookup
-                resolved = _resolve_spec(spec, task)
-                if resolved is not None and "check" in resolved:
-                    results.append(_run_check_grader(resolved, transcript, workspace))
-                elif resolved is not None and "sql" in resolved:
-                    results.append(_run_sql_grader(resolved, db_path))
-                else:
-                    results.append(GraderResult(
-                        grader_id=gid, role=role, verdict="fail",
-                        detail=spec.get("detail", ""),
-                        actual=f"unknown trajectory grader: {suffix!r}",
-                    ))
-        elif gid.startswith("judge."):
-            results.append(GraderResult(
-                grader_id=gid,
-                role=role,
-                verdict="skip",
-                detail=spec.get("detail", "LLM judge grader (Phase 3, not yet implemented)"),
-                actual="phase_3_not_implemented",
-            ))
+        if gid.startswith("judge."):
+            judge_specs.append(spec)
         else:
-            resolved = _resolve_spec(spec, task)
-            if resolved is None:
+            results.append(_run_one_grader(spec, transcript, db_path, workspace, task))
+
+    if not judge_specs:
+        return results
+
+    gates_pass = all(r.verdict == "pass" for r in results if r.role == "gate")
+
+    for spec in judge_specs:
+        if gates_pass:
+            results.extend(_run_judge_grader(spec, transcript, workspace, db_path))
+        else:
+            dimensions = spec.get("dimensions", [])
+            for dim in dimensions:
                 results.append(GraderResult(
-                    grader_id=gid,
-                    role=role,
+                    grader_id=f"{spec['id']}.{dim}",
+                    role="flag",
                     verdict="skip",
                     detail=spec.get("detail", ""),
-                    actual="deferred: no assertion registered for this grader",
+                    actual="skipped: gate graders did not all pass",
                 ))
-            elif "sql" in resolved:
-                results.append(_run_sql_grader(resolved, db_path))
-            elif "check" in resolved:
-                results.append(_run_check_grader(resolved, transcript, workspace))
-            else:
-                results.append(GraderResult(
-                    grader_id=resolved.get("id", "unknown"),
-                    role=resolved.get("role", "gate"),
-                    verdict="fail",
-                    detail=resolved.get("detail", ""),
-                    actual="unknown grader type: no 'sql' or 'check' field",
-                ))
+
     return results

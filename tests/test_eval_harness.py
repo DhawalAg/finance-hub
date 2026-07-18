@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 import pytest
 
+from evals.harness.graders import GraderResult
 from evals.harness.runner import Runner, Transcript, TranscriptEvent, TrialEnv
 
 # ---------------------------------------------------------------------------
@@ -982,11 +983,14 @@ class TestHarnessRunR2:
 
 
 class TestHarnessRunR3:
-    def test_r3_graders_pass(self, tmp_path):
+    def test_r3_graders_pass(self, tmp_path, monkeypatch):
+        from evals.harness import graders as graders_mod
         from evals.harness.harness import run
         from evals.harness.runner import Runner
 
         _THESIS = "# AAPL Thesis\n\n" + ("Apple is a great company. " * 20)
+        _STUB_JUDGE = '{"groundedness": {"score": 4, "justification": "ok"}, "coverage": {"score": 4, "justification": "ok"}, "source_quality": {"score": 4, "justification": "ok"}}'
+        monkeypatch.setattr(graders_mod, "_invoke_judge", lambda p, m: _STUB_JUDGE)
 
         class R3Runner(Runner):
             async def run(self, prompt: str, env: TrialEnv) -> Transcript:
@@ -2265,3 +2269,243 @@ class TestEmitSuiteReport:
         emit_suite_report(results_root)
         out = capsys.readouterr().out
         assert "pass^k" in out.lower() or "PASS" in out or "FAIL" in out
+
+
+# ---------------------------------------------------------------------------
+# LLM-judge grader (issue #47)
+# ---------------------------------------------------------------------------
+
+_JUDGE_TASK_R3 = Path(__file__).parent.parent / "evals" / "tasks" / "R3.yaml"
+
+_JUDGE_SPEC = {
+    "id": "judge.thesis_quality",
+    "role": "flag",
+    "judge_model": "claude-sonnet-5",
+    "rubric": "rubrics/thesis_quality_v1.yaml",
+    "rubric_version": "1",
+    "dimensions": ["groundedness", "coverage", "source_quality"],
+    "coverage_key_facts": ["fact A", "fact B"],
+    "flag_threshold": "any dimension score < 3/5",
+}
+
+_FAKE_JUDGE_RESPONSE = """{
+    "groundedness": {"score": 4, "justification": "Most claims cited; minor gaps."},
+    "coverage": {"score": 3, "justification": "Core topics addressed adequately."},
+    "source_quality": {"score": 5, "justification": "All authoritative sources."}
+}"""
+
+_FAKE_JUDGE_RESPONSE_LOW = """{
+    "groundedness": {"score": 2, "justification": "Several uncited claims."},
+    "coverage": {"score": 1, "justification": "Major topics missing."},
+    "source_quality": {"score": 3, "justification": "Mixed quality sources."}
+}"""
+
+
+def _make_gate_passing_results():
+    """Return a list of gate GraderResults that all pass."""
+    return [
+        GraderResult("outcome.a", "gate", "pass", ""),
+        GraderResult("outcome.b", "gate", "pass", ""),
+    ]
+
+
+def _make_gate_failing_results():
+    """Return a list where one gate grader failed."""
+    return [
+        GraderResult("outcome.a", "gate", "pass", ""),
+        GraderResult("outcome.b", "gate", "fail", ""),
+    ]
+
+
+class TestJudgeGrader:
+    """LLM-judge grader: per-dimension rows, versioned rubric, flag-not-gate, gate-conditional."""
+
+    def _grade_with_judge(self, tmp_path, monkeypatch, judge_response, gates_pass=True):
+        """Helper: run grade() with one judge grader, mocked judge, optional gate."""
+        from evals.harness import graders as graders_mod
+        from evals.harness.graders import grade
+
+        monkeypatch.setattr(graders_mod, "_invoke_judge", lambda p, m: judge_response)
+
+        gate_verdict = "pass" if gates_pass else "fail"
+        task = {
+            "graders": [
+                {"id": "outcome.gate1", "role": "gate",
+                 "sql": "SELECT 1", "expect": 1 if gates_pass else 0},
+                _JUDGE_SPEC,
+            ]
+        }
+        db = tmp_path / "test.db"
+        import sqlite3
+        with sqlite3.connect(db) as conn:
+            conn.execute("CREATE TABLE t (x INTEGER)")
+            conn.execute("INSERT INTO t VALUES (1)")
+        return grade(Transcript(), db, tmp_path, task)
+
+    def test_judge_skips_when_a_gate_fails(self, tmp_path, monkeypatch):
+        """Judge grader returns skip verdicts when any gate grader fails."""
+        results = self._grade_with_judge(tmp_path, monkeypatch, _FAKE_JUDGE_RESPONSE, gates_pass=False)
+        judge_results = [r for r in results if r.grader_id.startswith("judge.")]
+        assert len(judge_results) == len(_JUDGE_SPEC["dimensions"])
+        assert all(r.verdict == "skip" for r in judge_results), (
+            f"Expected all judge results to be 'skip', got: {[r.verdict for r in judge_results]}"
+        )
+
+    def test_judge_emits_per_dimension_rows_when_gates_pass(self, tmp_path, monkeypatch):
+        """Judge returns one GraderResult per dimension when gates pass."""
+        results = self._grade_with_judge(tmp_path, monkeypatch, _FAKE_JUDGE_RESPONSE, gates_pass=True)
+        judge_results = [r for r in results if r.grader_id.startswith("judge.")]
+        assert len(judge_results) == 3
+        assert {r.grader_id for r in judge_results} == {
+            "judge.thesis_quality.groundedness",
+            "judge.thesis_quality.coverage",
+            "judge.thesis_quality.source_quality",
+        }
+
+    def test_judge_rows_record_rubric_and_judge_version(self, tmp_path, monkeypatch):
+        """Each dimension row's actual dict includes rubric_version and judge_version."""
+        results = self._grade_with_judge(tmp_path, monkeypatch, _FAKE_JUDGE_RESPONSE, gates_pass=True)
+        judge_results = [r for r in results if r.grader_id.startswith("judge.")]
+        for r in judge_results:
+            assert isinstance(r.actual, dict), f"actual should be dict, got {type(r.actual)}"
+            assert r.actual.get("rubric_version") == "1", f"rubric_version missing in {r.actual}"
+            assert r.actual.get("judge_version") == "claude-sonnet-5", f"judge_version missing in {r.actual}"
+
+    def test_judge_above_threshold_verdict_is_pass(self, tmp_path, monkeypatch):
+        """Dimension score >= flag_below threshold → verdict='pass'."""
+        # All scores in _FAKE_JUDGE_RESPONSE are >= 3
+        results = self._grade_with_judge(tmp_path, monkeypatch, _FAKE_JUDGE_RESPONSE, gates_pass=True)
+        judge_results = [r for r in results if r.grader_id.startswith("judge.")]
+        assert all(r.verdict == "pass" for r in judge_results), (
+            f"All scores >= 3 should pass, got: {[(r.grader_id, r.verdict, r.actual) for r in judge_results]}"
+        )
+
+    def test_judge_below_threshold_verdict_is_fail(self, tmp_path, monkeypatch):
+        """Dimension score < flag_below threshold → verdict='fail'."""
+        # _FAKE_JUDGE_RESPONSE_LOW has scores 2, 1, 3
+        results = self._grade_with_judge(tmp_path, monkeypatch, _FAKE_JUDGE_RESPONSE_LOW, gates_pass=True)
+        judge_results = {r.grader_id: r for r in results if r.grader_id.startswith("judge.")}
+        assert judge_results["judge.thesis_quality.groundedness"].verdict == "fail"
+        assert judge_results["judge.thesis_quality.coverage"].verdict == "fail"
+        assert judge_results["judge.thesis_quality.source_quality"].verdict == "pass"
+
+    def test_judge_role_is_always_flag(self, tmp_path, monkeypatch):
+        """Judge grader rows always have role='flag', never 'gate'."""
+        results = self._grade_with_judge(tmp_path, monkeypatch, _FAKE_JUDGE_RESPONSE, gates_pass=True)
+        judge_results = [r for r in results if r.grader_id.startswith("judge.")]
+        assert all(r.role == "flag" for r in judge_results), (
+            f"Judge rows should have role=flag, got: {[(r.grader_id, r.role) for r in judge_results]}"
+        )
+
+    def test_judge_fail_does_not_affect_gate_pass(self, tmp_path, monkeypatch):
+        """A failed judge verdict (role=flag) does not count against gate pass."""
+        from evals.harness.graders import compose_verdict
+        results = self._grade_with_judge(
+            tmp_path, monkeypatch, _FAKE_JUDGE_RESPONSE_LOW, gates_pass=True
+        )
+        cv = compose_verdict(results)
+        # Gate graders all pass; judge verdicts are flag role and don't affect task_passes_gates
+        assert cv.task_passes_gates is True
+
+    def test_judge_rubric_loaded_from_file(self, tmp_path, monkeypatch):
+        """Rubric dimensions come from the YAML file on disk."""
+        from evals.harness import graders as graders_mod
+        from evals.harness.graders import grade
+
+        calls = []
+        def fake_judge(prompt, model):
+            calls.append(prompt)
+            return _FAKE_JUDGE_RESPONSE
+
+        monkeypatch.setattr(graders_mod, "_invoke_judge", fake_judge)
+
+        # Use a spec that names the real rubric file
+        task = {"graders": [_JUDGE_SPEC]}
+        grade(Transcript(), None, tmp_path, task)
+
+        # The judge was NOT called because there are no gate graders to pass
+        # (no gates → gates trivially pass → judge runs)
+        assert len(calls) == 1
+        # The prompt should mention rubric dimensions
+        assert "groundedness" in calls[0]
+
+    def test_judge_no_gates_means_trivially_passes(self, tmp_path, monkeypatch):
+        """When there are no gate graders, judge runs (gates trivially pass)."""
+        from evals.harness import graders as graders_mod
+        from evals.harness.graders import grade
+
+        invoked = []
+        monkeypatch.setattr(graders_mod, "_invoke_judge", lambda p, m: (invoked.append(1), _FAKE_JUDGE_RESPONSE)[1])
+
+        task = {"graders": [_JUDGE_SPEC]}
+        results = grade(Transcript(), None, tmp_path, task)
+        assert invoked, "Judge should have been invoked when no gates exist"
+        judge_results = [r for r in results if r.grader_id.startswith("judge.")]
+        assert len(judge_results) == 3
+
+    def test_judge_score_stored_in_actual(self, tmp_path, monkeypatch):
+        """Each dimension row's actual dict includes the numeric score."""
+        from evals.harness import graders as graders_mod
+        from evals.harness.graders import grade
+
+        monkeypatch.setattr(graders_mod, "_invoke_judge", lambda p, m: _FAKE_JUDGE_RESPONSE)
+        task = {"graders": [_JUDGE_SPEC]}
+        results = grade(Transcript(), None, tmp_path, task)
+        by_dim = {r.grader_id.split(".")[-1]: r for r in results if r.grader_id.startswith("judge.")}
+        assert by_dim["groundedness"].actual["score"] == 4
+        assert by_dim["coverage"].actual["score"] == 3
+        assert by_dim["source_quality"].actual["score"] == 5
+
+    def test_judge_justification_in_detail(self, tmp_path, monkeypatch):
+        """Each dimension row's detail field contains the justification text."""
+        from evals.harness import graders as graders_mod
+        from evals.harness.graders import grade
+
+        monkeypatch.setattr(graders_mod, "_invoke_judge", lambda p, m: _FAKE_JUDGE_RESPONSE)
+        task = {"graders": [_JUDGE_SPEC]}
+        results = grade(Transcript(), None, tmp_path, task)
+        by_dim = {r.grader_id.split(".")[-1]: r for r in results if r.grader_id.startswith("judge.")}
+        assert "Most claims cited" in by_dim["groundedness"].detail
+        assert "Core topics" in by_dim["coverage"].detail
+
+    def test_judge_skip_rows_when_gates_fail_have_correct_count(self, tmp_path, monkeypatch):
+        """When gates fail, skip rows are emitted for each declared dimension."""
+        from evals.harness import graders as graders_mod
+        from evals.harness.graders import grade
+
+        not_invoked = []
+        monkeypatch.setattr(graders_mod, "_invoke_judge",
+                            lambda p, m: not_invoked.append(1) or _FAKE_JUDGE_RESPONSE)
+
+        task = {
+            "graders": [
+                {"id": "outcome.gate1", "role": "gate",
+                 "check": "False"},
+                {**_JUDGE_SPEC, "dimensions": ["groundedness", "coverage"]},
+            ]
+        }
+        results = grade(Transcript(), None, tmp_path, task)
+        judge_results = [r for r in results if r.grader_id.startswith("judge.")]
+        assert len(judge_results) == 2
+        assert all(r.verdict == "skip" for r in judge_results)
+        assert not not_invoked, "Judge backend must not be invoked when gates fail"
+
+    def test_r3_task_judge_grader_dispatched(self, tmp_path, monkeypatch):
+        """grade() with R3 task dispatches judge.thesis_quality correctly."""
+        import yaml
+        from evals.harness import graders as graders_mod
+        from evals.harness.graders import grade
+
+        monkeypatch.setattr(graders_mod, "_invoke_judge", lambda p, m: _FAKE_JUDGE_RESPONSE)
+
+        task = yaml.safe_load(_JUDGE_TASK_R3.read_text())
+        # Remove deterministic graders so we can skip DB setup; inject always-pass gate
+        task["graders"] = [
+            {"id": "outcome.gate_always_pass", "role": "gate",
+             "check": "True"},
+            next(g for g in task["graders"] if g["id"].startswith("judge.")),
+        ]
+        results = grade(Transcript(), None, tmp_path, task)
+        judge_results = [r for r in results if r.grader_id.startswith("judge.")]
+        # Should emit one row per dimension declared in R3 judge spec
+        assert len(judge_results) == 3
