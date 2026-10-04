@@ -88,6 +88,28 @@ from the commit table above, include the lockdown note prominently), (b) merge l
 (c) keep stacking new work on the branch. Do whatever they choose; if stacking, still tag
 `ws1-start`.
 
+Surface these judgment calls made on the branch (in the PR body, or to the user directly) so they
+are ratified, not silently inherited:
+- **Zero gates ⇒ not passing** (`graders.gates_pass`): a task with no gate graders fails pass^k and
+  skips its judge. Spec §6.3/§6.4 is silent; all shipped tasks have gates.
+- **Groundedness accepts rounding**: a prose amount is grounded if it equals a tool amount rounded
+  half-up to the prose's precision (e.g. "$176.47" vs `176470588` micros). Strict equality is a
+  one-branch removal in `_is_grounded`.
+- **Unknown track/flag trajectory graders now `skip`** (were spurious `fail`); unknown *gate*
+  trajectory graders still fail.
+- **`runtime/mcp.json` → `py3env/bin/finance-mcp`** — also changes interactive sessions via the
+  `.mcp.json` symlink (works when Claude Code is started from the repo root).
+
+## Provenance of the workstreams
+
+Before writing this plan, the 2026-10-04 session proposed: fix eligibility; build all 12 missing
+C-task graders; convert C1's handler to YAML; run the regression suite. After checking open issues
+and the repo for leftover eval work (only #34 umbrella and #48 calibration are open; the suite had
+never run for real), it re-scoped: eligibility → WS1; real baseline → WS2; only the promised C7
+groundedness grader + C1 conversion → WS3; the 11 track-only graders → deferred backlog issue
+(WS4) until real runs show they're worth tracking (spec §11: find grader gaps by reading
+transcripts).
+
 ### WS1 — Fix strategy-eligibility bug (USER CHECKPOINT on the rule)
 
 **Bug:** `src/finance_hub/research/tools.py:421` (`_strategy_has_eligible`) and `:584`
