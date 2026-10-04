@@ -410,8 +410,14 @@ def _run_sql_grader(spec: dict, db_path: Path | None) -> GraderResult:
         actual = rows[0][0] if rows else None
         passed = actual == spec["expect"]
     else:
-        # No expect: grader just records the actual value (track metric)
+        # No expect: track/flag graders just record the actual value. A gate with no
+        # expectation (e.g. a typo'd key) must not pass vacuously.
         actual = rows[0][0] if rows else None
+        if role == "gate":
+            return GraderResult(
+                gid, role, "fail", detail,
+                actual=f"gate sql grader has no 'expect' or 'expect_min' (actual={actual!r})",
+            )
         passed = True
 
     return GraderResult(gid, role, "pass" if passed else "fail", detail, actual=actual)

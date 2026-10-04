@@ -19,11 +19,12 @@ import hashlib
 import re
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
 
+from finance_hub import factories
 from finance_hub.money import to_micro_dollars
 from finance_hub.store import connection
 
@@ -254,7 +255,7 @@ class FidelityPortfolioCsvAdapter:
 
         positions = [p for p in rows if p is not None]
         snapshot_id = f"snap_{uuid.uuid4().hex[:12]}"
-        created_at = datetime.now(timezone.utc).isoformat()
+        created_at = factories.get_clock().now().isoformat()
 
         with connection.connect() as conn:
             conn.execute(

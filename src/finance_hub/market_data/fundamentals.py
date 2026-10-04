@@ -27,6 +27,7 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Any, Iterable, Optional
 
+from finance_hub import factories
 from finance_hub.envelope import SCREENING, Envelope
 
 # --- field vocabulary ----------------------------------------------------
@@ -265,7 +266,7 @@ def _text(field: str, raw: Any, *, unit: str, source: str, as_of: str) -> Option
 
 def normalize_eodhd(raw: dict, *, source: str = "eodhd") -> list[Fundamental]:
     """Normalize a recorded EODHD fundamentals response into envelopes."""
-    as_of = _dig(raw, "General", "UpdatedAt") or date.today().isoformat()
+    as_of = _dig(raw, "General", "UpdatedAt") or factories.get_clock().now().date().isoformat()
 
     out: list[Optional[Fundamental]] = []
     if _is_etf(_dig(raw, "General", "Type")):
@@ -317,7 +318,7 @@ def normalize_alpha_vantage(raw: dict, *, source: str = "alpha_vantage") -> list
     """
     asset_type = raw.get("AssetType") or raw.get("asset_type")
     if _is_etf(asset_type) or "net_expense_ratio" in raw or "net_assets" in raw:
-        as_of = raw.get("LatestQuarter") or date.today().isoformat()
+        as_of = raw.get("LatestQuarter") or factories.get_clock().now().date().isoformat()
         out = [
             _scalar(EXPENSE_RATIO, raw.get("net_expense_ratio"), unit=RATIO,
                     source=source, as_of=as_of),
@@ -327,7 +328,7 @@ def normalize_alpha_vantage(raw: dict, *, source: str = "alpha_vantage") -> list
         ]
         return [f for f in out if f is not None]
 
-    as_of = raw.get("LatestQuarter") or date.today().isoformat()
+    as_of = raw.get("LatestQuarter") or factories.get_clock().now().date().isoformat()
 
     def num(field: str, key: str, unit: str) -> Optional[Fundamental]:
         return _scalar(field, raw.get(key), unit=unit, source=source, as_of=as_of)

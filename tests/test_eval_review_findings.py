@@ -236,7 +236,6 @@ def test_f8_judge_does_not_block_event_loop(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------- F9
-@open_finding("f9")
 def test_f9_sql_gate_with_typoed_expect_key_does_not_pass(tmp_path):
     db = tmp_path / "t.db"
     sqlite3.connect(db).close()
@@ -279,7 +278,6 @@ def test_cut4_golden_transcript_parses(golden):
     ("src/finance_hub/strategy/portfolio_snapshot.py", "datetime.now("),
     ("src/finance_hub/market_data/fundamentals.py", "date.today()"),
 ])
-@open_finding("cut5")
 def test_cut5_clock_front_door(rel, pat):
     hits = [i for i, l in enumerate((REPO / rel).read_text().splitlines(), 1) if pat in l]
     assert not hits, f"{rel} bypasses factories.get_clock() at lines {hits}"
