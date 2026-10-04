@@ -250,6 +250,50 @@ def test_f10_no_worktree_snapshot_or_nvim_log_tracked():
     assert not out, f"{len(out)} stray tracked files, e.g. {out[:3]}"
 
 
+# ================================================================ post-review groundedness findings
+def _priced(result, prose):
+    t = _with_final_text(_tx(("t1", "finance.get_deployment_plan", {}, result, False)), prose)
+    return _traj_no_invented_prices("trajectory.no_invented_prices", "gate", "", t)
+
+
+# ---------------------------------------------------------------- G1: non-money strings donate amounts
+@pytest.mark.parametrize("value", [
+    "2026-10-04T00:00:00.50Z",            # ISO timestamp fractional seconds
+    "2026-10-04T13:42:00.50+00:00",       # real MCP created_at shape (R12)
+    "v0.50",                              # version string
+    "0.50-beta",
+    "plan_0.50",                          # id
+])
+def test_g1_non_money_string_does_not_ground(value):
+    r = _priced({"as_of": value}, "Fee is $0.50.")
+    assert r.verdict == "fail", f"{value!r} grounded $0.50: {r.actual}"
+
+
+def test_g1_decimal_in_readiness_message_still_grounds():
+    # R5/R8/R9 goldens: readiness messages carry the only copy of the post-buy weight
+    r = _priced({"message": "post-buy weight of AAPL would be 18.33%, above the 10% threshold"},
+                "AAPL would be 18.33% after the buy.")
+    assert r.verdict == "pass", r.actual
+
+
+def test_g1_comma_grouped_amount_in_message_grounds():
+    r = _priced({"message": "deploys $1,234.56 across 3 sleeves"}, "The plan deploys $1,234.56.")
+    assert r.verdict == "pass", r.actual
+
+
+# ---------------------------------------------------------------- G2: whole-dollar prose never checked
+def test_g2_whole_dollar_grounded_by_rounded_micros():
+    r = _priced({"amount_micros": 12_345_678_901}, "Buy $12,346 of VTI.")
+    assert r.verdict == "pass", r.actual
+    assert "12346" in r.actual, f"$12,346 was never checked: {r.actual}"
+
+
+def test_g2_ungrounded_whole_dollar_fails():
+    r = _priced({"amount_micros": 12_345_678_901}, "Buy $12,346 of VTI and $500 of QQQ.")
+    assert r.verdict == "fail"
+    assert "500" in r.actual
+
+
 # ================================================================ cut-by-cap findings
 def test_cut1_zero_gate_semantics_consistent():
     assert harness._trial_gate_pass([]) == compose_verdict([]).task_passes_gates

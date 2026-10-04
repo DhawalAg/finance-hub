@@ -130,6 +130,17 @@ class TestTrajectoryHelpers:
         nums = _extract_financial_numbers("Cash available: $1,000.00")
         assert "1000.00" in nums
 
+    def test_extract_financial_numbers_dollar_whole_amount(self):
+        from evals.harness.graders import _extract_financial_numbers
+
+        assert _extract_financial_numbers("Buy $12,346 of VTI, $500 of QQQ and $1.50 fee.") == {
+            "12346", "500", "1.50"}
+
+    def test_extract_financial_numbers_ignores_bare_integers_and_years(self):
+        from evals.harness.graders import _extract_financial_numbers
+
+        assert _extract_financial_numbers("In 2026, 3 instruments over 1,200 days.") == set()
+
     def test_extract_financial_numbers_empty_text(self):
         from evals.harness.graders import _extract_financial_numbers
 

@@ -498,17 +498,16 @@ def _final_text(transcript: Transcript) -> str:
 
 
 def _extract_financial_numbers(text: str) -> set[str]:
-    """Extract financial number strings from prose (dollar amounts with decimals).
+    """Extract financial number strings from prose ($ amounts and bare decimals).
 
-    Returns normalized strings (no $ or commas). Only extracts numbers with
-    decimal points to avoid false positives from plain counts like "3 instruments".
+    Returns normalized strings (no $ or commas). A bare number must have a decimal
+    point and a $ amount may be whole ("$12,346"), so plain counts and years like
+    "3 instruments" or "2026" are never extracted.
     """
     numbers: set[str] = set()
-    # Dollar amounts with decimals: $234.56, $1,234.56
-    for m in re.finditer(r"\$[\d,]+\.\d+", text):
-        n = m.group().lstrip("$").replace(",", "")
-        if n:
-            numbers.add(n)
+    # Dollar amounts, whole or decimal: $500, $12,346, $234.56, $1,234.56
+    for m in re.finditer(r"\$(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?", text):
+        numbers.add(m.group().lstrip("$").replace(",", ""))
     # Standalone decimal numbers: 234.56, 1234.56, 1,234.56 (not preceded by $). The
     # lookbehind also rejects a digit/comma/dot so "$12,345.67" never yields "345.67".
     for m in re.finditer(r"(?<![$\d,.])(?:\d{1,3}(?:,\d{3})+|\d+)\.\d{2,}(?![\d.])", text):
@@ -517,7 +516,13 @@ def _extract_financial_numbers(text: str) -> set[str]:
 
 
 _NUMERIC_STR_RE = re.compile(r"-?\d+(?:\.\d+)?")
-_DECIMAL_TOKEN_RE = re.compile(r"(?<![\d.])\d+\.\d+(?![\d.])")
+# A decimal amount written as its own word in tool-result text: "18.33%", "$1,234.56.",
+# "(190.50)". Matched against whole whitespace-split words after _WORD_PUNCT_* is stripped,
+# so a decimal fused to other characters (timestamps "00:00.50Z", "v0.50", "plan_0.50")
+# is not one.
+_DECIMAL_WORD_RE = re.compile(r"(?:\d{1,3}(?:,\d{3})+|\d+)\.\d+")
+_WORD_PUNCT_LEAD = "$([\"'"
+_WORD_PUNCT_TRAIL = "%,;)]\"'.!?"
 _MICROS = Decimal(1_000_000)
 
 
@@ -550,7 +555,9 @@ def _grounded_amounts(content: Any, out: set[Decimal], key: str = "") -> None:
     Conservative by design — plain JSON integers (counts, bps, ids) are NOT amounts:
       - integer (or numeric-string) value under a key ending "_micros" → value ÷ 1e6
       - string that is wholly numeric ("700", "190.5") → its value
-      - decimal tokens embedded in a string ("close 185.20 on …") → their values
+      - decimal words embedded in text ("weight would be 18.33%, above …") → their
+        values; only whole whitespace-delimited words count (see _DECIMAL_WORD_RE),
+        so timestamps, versions and ids ("…T00:00:00.50Z", "v0.50") donate nothing
       - JSON float → its value
     """
     if isinstance(content, dict):
@@ -572,8 +579,10 @@ def _grounded_amounts(content: Any, out: set[Decimal], key: str = "") -> None:
     elif isinstance(content, str):
         if _NUMERIC_STR_RE.fullmatch(content.strip()):
             out.add(Decimal(content.strip()))
-        for m in _DECIMAL_TOKEN_RE.finditer(content):
-            out.add(Decimal(m.group()))
+        for word in content.split():
+            word = word.lstrip(_WORD_PUNCT_LEAD).rstrip(_WORD_PUNCT_TRAIL)
+            if _DECIMAL_WORD_RE.fullmatch(word):
+                out.add(Decimal(word.replace(",", "")))
 
 
 # ---------------------------------------------------------------------------
@@ -651,7 +660,7 @@ def _traj_no_invented_prices(
     rounded half-up to the prose's precision also counts, so 176470588 micros grounds
     "$176.47" (see _is_grounded). Grounded amounts are
     collected conservatively (see _grounded_amounts): integer *_micros fields ÷ 1e6,
-    whole-string numerics ("700", "190.5"), decimal tokens inside strings, and JSON
+    whole-string numerics ("700", "190.5"), standalone decimal words in text, and JSON
     floats — never arbitrary JSON integers (counts, bps, ids). The LLM judge (§6.3)
     covers qualitative grounding for the long tail.
     """
