@@ -1,0 +1,29 @@
+# Finance Hub — Runtime Surface Materialization List
+#
+# This file names every runtime-surface file the harness copies into a trial dir.
+# It is also the exact input to the §8.3 prompt hash: the hash is computed over
+# the file contents of exactly these entries, in order.
+#
+# Edit only when the deployed runtime surface changes:
+#   - New skill shipped (ADR-0006 DoD): add runtime/skills/<name>/SKILL.md entry
+#   - runtime/CLAUDE.md wording changed: no list change, but the hash changes
+#   - MCP config changed: no list change, but the hash changes
+#
+# Format: one path per line, relative to repo root.
+# Empty lines and lines starting with '#' are ignored.
+#
+# Load paths: entries land at <trial>/<path>.  Claude Code reads project context
+# only from <cwd>/CLAUDE.md, so the runner (runner.bridge_project_context) links
+# <trial>/CLAUDE.md -> runtime/CLAUDE.md before launch.  runtime/mcp.json names
+# the server by a repo-relative command (py3env/bin/finance-mcp); the runner
+# anchors it to the repo root (runner.resolve_mcp_servers).
+#
+# Audit note — root CLAUDE.md:
+#   The root CLAUDE.md is a symlink to AGENTS.md. Its 27-line content is entirely
+#   dev scaffolding: issue-tracker instructions, triage-label vocabulary, py3env
+#   path convention, and the finance-CLI wrapper note. Line-by-line audit result:
+#   zero runtime content. The root CLAUDE.md is excluded from the runtime surface
+#   and never enters a trial. Scaffolding edits never change the prompt hash.
+
+runtime/CLAUDE.md
+runtime/mcp.json

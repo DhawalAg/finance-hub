@@ -1,0 +1,118 @@
+id: C8
+title: "Skill: research-priorities workflow — identify and act on candidate queue (placeholder)"
+version: "1"
+suite: capability
+workflow: research
+fixture: skill_workflow_stub
+  # Placeholder task for the first ADR-0005 skill adopted under ADR 0006.
+  # Per ADR 0006: adopting a skill is a capability claim; the adopting PR adds ≥1
+  # capability task per workflow the skill orchestrates. Tasks grade workflows, not
+  # skills — they outlive the skill and are never invoked directly against it.
+  #
+  # This task exercises the research-priorities → candidate-review workflow:
+  # the natural target for a research-workflow skill. It exists as a placeholder
+  # so the ADR-0006 DoD can be met when the first skill is adopted.
+  #
+  # What the fixture contains:
+  #   - fin_themes: theme_c8 (watching, "Skill Workflow Queue")
+  #   - fin_theme_instruments: VTI + AAPL, both status='candidate' (unreviewed)
+  #   - fin_strategy_versions: 0 rows (no strategy yet)
+  #   - workspace/research/instruments/: empty dir
+  #
+  # Authoring constraint (ADR 0006, from issue #25): the Agent SDK ignores
+  # SKILL.md allowed-tools frontmatter; tool restriction for eval runs belongs
+  # in the runner's allowed_tools configuration, not the skill file.
+now: "2026-06-23T12:00:00+00:00"
+
+prompt: |
+  theme_c8 "Skill Workflow Queue" has two candidate instruments: VTI and AAPL.
+  Neither has been reviewed or approved yet.
+
+  Your task:
+  1. Use finance.research_priorities to identify what needs research attention in theme_c8.
+  2. Review at least one of the candidates using finance.review_instrument. For VTI,
+     set conviction=5 and role=broad_market_etf. For AAPL, set conviction=4 and
+     role=single_stock (and write a brief thesis note via finance.set_research_note).
+  3. Report: which candidates were reviewed, which are ready for promotion, and what
+     additional steps are needed before the theme can be promoted to a strategy.
+
+reference:
+  description: >
+    The agent calls finance.research_priorities for theme_c8, which shows both VTI and
+    AAPL as candidates needing review. The agent reviews at least one instrument via
+    finance.review_instrument. It reports on readiness: reviewed candidates become
+    'approved' in the DB; unreviewed ones remain 'candidate'. A full promotion would
+    require both candidates to be approved and an AAPL thesis note.
+
+  instruments:
+    - ticker: "VTI"
+      initial_status: "candidate"
+      expected_after_review: "approved"
+    - ticker: "AAPL"
+      initial_status: "candidate"
+      expected_after_review: "approved"
+
+  db_assertions:
+    - id: at_least_one_reviewed
+      description: "at least 1 instrument transitioned from 'candidate' to 'approved'"
+      sql: "SELECT COUNT(*) FROM fin_theme_instruments WHERE status = 'approved'"
+      expect_min: 1
+
+graders:
+  - id: outcome.research_priorities_called
+    role: gate
+    detail: "agent called finance.research_priorities to assess the research queue"
+    check: >
+      tool_called('finance.research_priorities')
+
+  - id: outcome.at_least_one_instrument_reviewed
+    role: gate
+    detail: "at least 1 instrument approved after candidate review"
+    sql: "SELECT CASE WHEN COUNT(*) >= 1 THEN 1 ELSE 0 END FROM fin_theme_instruments WHERE status = 'approved'"
+    expect: 1
+
+  - id: outcome.review_instrument_called
+    role: gate
+    detail: "agent called finance.review_instrument for at least one candidate"
+    check: >
+      tool_called('finance.review_instrument')
+
+  - id: trajectory.readiness_reported
+    role: track
+    detail: "agent reported what additional steps are needed before promotion (expected output)"
+
+  - id: trajectory.both_candidates_reviewed
+    role: track
+    detail: "agent reviewed both VTI and AAPL candidates (full queue clearance)"
+
+provenance: >
+  Spec §10 C8 — skill capability placeholder: first ADR-0005 skill exercised end-to-end.
+  Per ADR 0006: adopting a skill under ADR 0005 requires ≥1 capability task per workflow
+  it orchestrates. This placeholder covers the research-priorities → candidate-review
+  workflow. Tasks grade workflows, not skills; this task outlives any specific skill.
+  Authoring constraint (ADR 0006): tool restriction belongs in runner's allowed_tools,
+  not SKILL.md frontmatter.
+  ADR 0006 (capability task): witnessed-run bar; golden transcript deferred to
+  migration-to-regression moment. Frontier expected to start low.
+  Issue #50 — Phase 4 capability frontier: C4/C5/C6/C8.
+
+ambiguity_notes:
+  - |
+    INITIAL AMBIGUITY: "skill exercised end-to-end" — which skill? This is a placeholder;
+    no ADR-0005 skill has been adopted yet. FIX: the task exercises the research-priorities
+    → candidate-review workflow, which is the natural target for a research workflow skill.
+    When a skill is adopted under ADR 0006, this task's fixture and graders may be updated
+    to include the skill in the runner's allowed_tools; the task remains workflow-owned.
+
+  - |
+    INITIAL AMBIGUITY: the outcome.research_priorities_called gate checks the tool name
+    'finance.research_priorities'. If the agent uses a different tool to identify candidate
+    priorities (e.g. get_theme + list_themes), this gate fails. FIX: the prompt explicitly
+    directs the agent to use finance.research_priorities; this is the tool the skill would
+    orchestrate. Gate failure is expected at the frontier.
+
+  - |
+    INITIAL AMBIGUITY: "at least one candidate reviewed" — the gate requires only 1 approval.
+    A full readiness check (promotion-ready) requires both. FIX: the gate is lenient to
+    reflect the frontier bar. Both-candidates-reviewed is tracked as a non-gate metric
+    (trajectory.both_candidates_reviewed) for cross-version comparison.

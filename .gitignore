@@ -8,3 +8,7 @@ py3env
 *.egg-info/
 workspace/
 node_modules/
+
+# local-only: agent worktrees, editor logs
+.claude/worktrees/
+nvim.log

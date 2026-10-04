@@ -1,0 +1,128 @@
+id: C4
+title: "Research: multi-instrument theme brief with cited evidence (judge-graded)"
+version: "1"
+suite: capability
+workflow: research
+fixture: multi_instrument_theme_brief
+  # DB seeded with VTI + AAPL both approved in theme_c4 "Quality Compounders".
+  # Each instrument has 2 active source links and pre-seeded fundamentals.
+  # AAPL has a thesis note in workspace/research/instruments/AAPL.md.
+  # VTI has a rationale note in workspace/research/instruments/VTI.md.
+  #
+  # What the fixture contains:
+  #   - fin_themes: theme_c4 (watching, "Quality Compounders")
+  #   - fin_instruments: VTI (etf/broad_market_etf) + AAPL (stock/single_stock)
+  #     Both approved in theme_c4 with conviction notes.
+  #   - fin_research_source_links: 2 active links each for VTI and AAPL
+  #   - fin_fundamentals: AAPL (8 rows, source=eodhd) + VTI (≥1 rows, source=eodhd)
+  #   - workspace/research/instruments/AAPL.md: thesis note
+  #   - workspace/research/instruments/VTI.md: ETF rationale note
+now: "2026-06-23T12:00:00+00:00"
+
+prompt: |
+  theme_c4 "Quality Compounders" contains two approved instruments: VTI and AAPL.
+  Using the available tools, produce a multi-instrument research brief that:
+  1. Summarises the key characteristics and conviction rationale for each instrument.
+  2. Cites specific evidence from the registered source links and fundamentals data.
+  3. Synthesises any thematic connections or contrasts between VTI and AAPL in the context
+     of this portfolio theme.
+
+  Save the brief as workspace/research/themes/theme_c4.md using finance.set_research_note.
+
+reference:
+  description: >
+    The agent calls finance.list_themes, finance.get_theme, finance.list_sources, and
+    finance.get_research_note to gather data. For each instrument (VTI, AAPL), it retrieves
+    conviction notes, source links, and available fundamentals. The brief covers both
+    instruments with cited evidence and synthesises their complementary roles: VTI as the
+    broad-market backbone and AAPL as the high-conviction single-stock holding. The note
+    is saved to workspace/research/themes/theme_c4.md.
+
+  instruments:
+    - ticker: "VTI"
+      type: "etf/broad_market_etf"
+      conviction: 5
+      sources: 2
+    - ticker: "AAPL"
+      type: "stock/single_stock"
+      conviction: 4
+      sources: 2
+
+  judge_rubric: "rubrics/theme_brief_quality_v1.yaml"
+
+  db_assertions:
+    - table: fin_fundamentals
+      where: "ticker = 'AAPL'"
+      count: 8
+      note: "AAPL fundamentals pre-seeded (pre-condition)"
+
+    - table: fin_research_source_links
+      where: "status = 'active'"
+      count_min: 4
+      note: "All 4 source links active (2 per instrument)"
+
+graders:
+  - id: outcome.fundamentals_present_aapl
+    role: gate
+    detail: "fin_fundamentals has 8 rows for AAPL (pre-condition validates fixture integrity)"
+    sql: "SELECT COUNT(*) FROM fin_fundamentals WHERE ticker = 'AAPL'"
+    expect: 8
+
+  - id: outcome.source_links_intact
+    role: gate
+    detail: "at least 4 active source links (pre-condition: fixture sources not corrupted)"
+    sql: "SELECT CASE WHEN COUNT(*) >= 4 THEN 1 ELSE 0 END FROM fin_research_source_links WHERE status = 'active'"
+    expect: 1
+
+  - id: outcome.theme_brief_note_written
+    role: gate
+    detail: "agent wrote a theme brief note via finance.set_research_note"
+    check: >
+      tool_called('finance.set_research_note')
+
+  - id: trajectory.list_sources_or_get_theme_called
+    role: track
+    detail: "agent called finance.list_sources or finance.get_theme to retrieve evidence (expected research path)"
+
+  - id: judge.theme_brief_quality
+    role: flag
+    judge_model: "claude-sonnet-5"
+    rubric: "rubrics/theme_brief_quality_v1.yaml"
+    rubric_version: "1"
+    dimensions:
+      - coverage
+      - groundedness
+      - cross_instrument_synthesis
+    flag_threshold: "any dimension score < 3/5"
+    detail: >
+      LLM judge evaluates the theme brief across three dimensions: coverage of all
+      instruments, groundedness in cited evidence, and cross-instrument synthesis.
+      Flags for human review if any dimension scores below 3.
+
+provenance: >
+  Spec §10 C4 — research capability: multi-instrument theme brief with cited evidence.
+  Judge-graded via §6.3 LLM-judge grader (uses issue #47 infrastructure).
+  ADR 0006 (capability task): witnessed-run bar; golden transcript deferred to
+  migration-to-regression moment. Frontier expected to start low.
+  Issue #50 — Phase 4 capability frontier: C4/C5/C6/C8.
+
+ambiguity_notes:
+  - |
+    INITIAL AMBIGUITY: "multi-instrument theme brief" — what format should the brief take?
+    FIX: the prompt asks the agent to save the brief as workspace/research/themes/theme_c4.md
+    via finance.set_research_note (scope=theme, key=theme_c4). The gate grader checks that
+    set_research_note was called; the judge grades the content.
+
+  - |
+    INITIAL AMBIGUITY: which tools should the agent use to gather evidence?
+    FIX: the trajectory track grader notes whether list_sources or get_theme was called,
+    but does not gate — the agent may use any combination of tools to assemble the brief.
+    The judge grader's groundedness dimension evaluates whether the evidence is actually
+    from tool results.
+
+  - |
+    INITIAL AMBIGUITY: the judge grader runs only on gate-passing trials (spec §6.3).
+    For a capability frontier task at Phase 4, the gate-pass rate may be low — that is
+    expected. Judge calls scale with gate-passing trials, not total trials.
+    FIX: outcome.theme_brief_note_written is a single gate checking set_research_note was
+    called; the judge grades quality only when that gate passes.

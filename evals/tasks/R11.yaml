@@ -1,0 +1,150 @@
+id: R11
+title: "Conviction-without-note rejection handled correctly (negative/validation)"
+version: "1"
+suite: regression
+workflow: research
+fixture: theme_with_candidate_msft
+  # DB seeded with a theme and one candidate instrument not yet reviewed.
+  # fin_themes: theme_r11 (status=watching, display_name="Cloud Growth")
+  # fin_theme_instruments: MSFT (status=candidate, conviction=null, conviction_note=null)
+  # fin_instruments: MSFT (type=stock, instrument_role=single_stock)
+  # NOT pre-seeded: any approved review or conviction data.
+  #
+  # Seed steps:
+  #   1. migrations.run() on a temp DB.
+  #   2. set_theme(key='theme_r11', display_name='Cloud Growth', status='watching')
+  #   3. map_instruments(theme_key='theme_r11', instruments=[
+  #        {'ticker': 'MSFT', 'type': 'stock', 'instrument_role': 'single_stock',
+  #         'display_name': 'Microsoft Corp'}
+  #      ])
+now: "2026-07-01T12:00:00+00:00"
+
+prompt: |
+  Review Microsoft (MSFT) in theme "theme_r11" (Cloud Growth).
+
+  Attempt to approve MSFT with conviction=5 and NO conviction note.
+
+  If the tool rejects the call, handle the rejection correctly:
+  - Report the error clearly.
+  - Retry the review with an appropriate conviction note.
+
+  Correct conviction note to use on retry:
+  "Azure market share growing steadily; Office 365 subscription lock-in provides
+  recurring revenue base with high switching costs."
+
+  Rationale: "Dominant cloud platform with enterprise sticky relationships and
+  strong recurring revenue through Azure and Office 365."
+
+  After the successful retry, confirm the final state of MSFT in theme_r11.
+
+reference:
+  description: >
+    The first review_instrument call (conviction=5, no note) raises a ValueError:
+    "conviction requires a non-empty conviction_note". The agent correctly handles
+    this rejection by retrying with both conviction=5 and the conviction_note provided.
+    The retry succeeds. Final state: MSFT has status=approved, conviction=5,
+    and a non-empty conviction_note in fin_theme_instruments.
+
+  expected_error_on_first_call:
+    error_type: "ValueError"
+    message: "conviction requires a non-empty conviction_note"
+
+  final_state:
+    theme_key: "theme_r11"
+    ticker: "MSFT"
+    status: "approved"
+    conviction: 5
+    conviction_note_nonempty: true
+
+  assertions:
+    - id: msft_approved_with_conviction
+      description: "MSFT has status=approved and conviction=5 in theme_r11"
+      sql: >
+        SELECT COUNT(*) FROM fin_theme_instruments
+        WHERE theme_key = 'theme_r11'
+        AND ticker = 'MSFT'
+        AND status = 'approved'
+        AND conviction = 5
+      expect: 1
+
+    - id: conviction_note_nonempty
+      description: "MSFT conviction_note is not null and not empty"
+      sql: >
+        SELECT COUNT(*) FROM fin_theme_instruments
+        WHERE theme_key = 'theme_r11'
+        AND ticker = 'MSFT'
+        AND conviction_note IS NOT NULL
+        AND length(trim(conviction_note)) > 0
+      expect: 1
+
+    - id: error_handled_not_silenced
+      description: "transcript contains an is_error=true result for finance.review_instrument"
+      check: "transcript.tool_results.has_error('finance.review_instrument')"
+
+    - id: retry_with_note
+      description: "a successful review_instrument call includes a non-empty conviction_note"
+      check: "transcript.tool_inputs.field_nonempty('finance.review_instrument', 'conviction_note')"
+
+  # Golden transcript path (relative to evals/)
+  golden: "tasks/R11/golden/transcript.jsonl"
+
+graders:
+  - id: outcome.msft_approved_with_conviction
+    role: gate
+
+  - id: outcome.conviction_note_nonempty
+    role: gate
+
+  - id: trajectory.error_handled_not_silenced
+    role: gate
+    detail: >
+      The transcript must contain a tool_result with is_error=true (the rejection)
+      followed by a second review_instrument call that succeeds. An agent that silently
+      ignores the conviction requirement (e.g. by calling with conviction=null to bypass
+      the check) fails this gate. The agent must encounter the rejection and supply a note.
+
+  - id: trajectory.retry_with_note
+    role: gate
+    detail: >
+      The second (successful) review_instrument call must include a non-empty
+      conviction_note. An agent that retries with conviction=null to bypass the
+      validation also fails — the intent is to test that the agent handles the
+      tool's contract correctly, not that it evades validation.
+
+provenance: >
+  Spec §10 R11 — conviction-without-note rejection handled correctly.
+  §5.3 negative task: "Validation handling: conviction score without a note is
+  rejected by the tool → agent must handle the rejection correctly (supply a note
+  or surface the requirement), not silently drop the review."
+  The tool enforces: ValueError('conviction requires a non-empty conviction_note').
+
+ambiguity_notes:
+  - |
+    INITIAL AMBIGUITY: "handle the rejection correctly" — three possible paths:
+    (a) agent supplies a conviction_note on retry, (b) agent drops the conviction
+    score to null (bypassing the requirement), (c) agent reports the error without
+    retrying. FIX: the task prompt instructs path (a) explicitly by providing the
+    note text. The trajectory grader checks both that the rejection was received
+    AND that the retry includes a non-empty conviction_note.
+
+  - |
+    INITIAL AMBIGUITY: does the tool error appear as is_error=true in the tool result,
+    or as a Python exception? FIX: the MCP server wraps tool exceptions as
+    is_error=true tool results; the agent sees the rejection as a structured error
+    in the conversation, not a Python traceback. The trajectory grader checks for
+    is_error=true in the transcript.
+
+  - |
+    INITIAL AMBIGUITY: could the agent call map_instruments with conviction+note inline
+    instead of going through review_instrument? Yes — both tools enforce the conviction
+    + note invariant via _require_conviction_note. If the agent uses map_instruments
+    (which would fail on a first call without a note and succeed on a retry), the
+    outcome graders still pass. The trajectory grader checks is_error=true appears;
+    it does not require a specific tool name.
+
+  - |
+    INITIAL AMBIGUITY: what conviction_note should the agent supply on retry? The
+    prompt provides a specific note to ensure the test is deterministic and the grader
+    can check it. The note is plausible and accurate — MSFT's Azure position and
+    Office 365 lock-in are correct factual claims — so the test also functions as a
+    light probe of whether the agent supplies a grounded note vs. a placeholder.

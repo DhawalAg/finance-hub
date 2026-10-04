@@ -1,0 +1,168 @@
+id: R2
+title: "Create theme + map 3 instruments + review each with conviction and note"
+version: "1"
+suite: regression
+workflow: research
+fixture: dividend_growth_empty
+  # Fresh DB with no themes or instruments yet.
+  # Seed steps:
+  #   1. migrations.run() on a temp DB.
+  #   (NO pre-seeded themes, instruments, or reviews — all created by the agent)
+now: "2026-07-01T12:00:00+00:00"
+
+prompt: |
+  Create a research theme for dividend growth investing and research three instruments:
+
+  Theme: key "theme_r2", display_name "Dividend Growth", status "watching",
+  description "Income-generating dividend growth companies with multi-decade track records."
+
+  Map the following candidate instruments to theme_r2:
+    - JNJ (Johnson & Johnson) — type stock, role single_stock
+    - PG (Procter & Gamble Co) — type stock, role single_stock
+    - KO (The Coca-Cola Company) — type stock, role single_stock
+
+  Then review each instrument with status "approved" and provide a conviction score
+  plus a conviction note for each:
+    - JNJ: conviction 4, rationale "Healthcare giant with 60+ year dividend growth track
+      record; defensive cash generator with strong pricing power in branded products."
+      conviction_note "Strong dividend history; Kenvue spin-off removes liability overhang
+      and sharpens focus on MedTech and pharmaceuticals."
+    - PG: conviction 4, rationale "Consumer staples fortress; unmatched global distribution
+      and brand portfolio with consistent pricing power across cycles."
+      conviction_note "Best-in-class brand portfolio; 67-year dividend growth streak
+      demonstrates through-cycle resilience."
+    - KO: conviction 3, rationale "Global beverage network with decades of dividend
+      compounding; mature growth but deeply defensive."
+      conviction_note "Buffett core holding; franchise network is wide-moat but revenue
+      growth is structurally limited by beverage market saturation."
+
+  Report the final status of each instrument after the reviews complete.
+
+reference:
+  description: >
+    After the agent runs all tools, theme_r2 exists in fin_themes with status=watching.
+    JNJ, PG, and KO are all in fin_theme_instruments with status=approved, their
+    respective conviction scores, and non-empty conviction_notes. No strategy state
+    is mutated (research stays in research tables only).
+
+  theme:
+    key: "theme_r2"
+    display_name: "Dividend Growth"
+    status: "watching"
+
+  # fin_theme_instruments: 3 rows
+  reviews:
+    - theme_key: "theme_r2"
+      ticker: "JNJ"
+      status: "approved"
+      conviction: 4
+      conviction_note_nonempty: true
+
+    - theme_key: "theme_r2"
+      ticker: "PG"
+      status: "approved"
+      conviction: 4
+      conviction_note_nonempty: true
+
+    - theme_key: "theme_r2"
+      ticker: "KO"
+      status: "approved"
+      conviction: 3
+      conviction_note_nonempty: true
+
+  # fin_strategy_instruments: 0 rows (research must not touch strategy tables)
+  strategy_instruments_count: 0
+
+  # Golden transcript path (relative to evals/)
+  golden: "tasks/R2/golden/transcript.jsonl"
+
+graders:
+  - id: outcome.theme_created
+    role: gate
+    detail: "fin_themes has a row with key=theme_r2, status=watching"
+    sql: >
+      SELECT COUNT(*) FROM fin_themes
+      WHERE key = 'theme_r2'
+      AND status = 'watching'
+    expect: 1
+
+  - id: outcome.all_three_instruments_approved
+    role: gate
+    detail: "fin_theme_instruments has 3 rows with status=approved for theme_r2"
+    sql: >
+      SELECT COUNT(*) FROM fin_theme_instruments
+      WHERE theme_key = 'theme_r2'
+      AND status = 'approved'
+    expect: 3
+
+  - id: outcome.all_approved_have_conviction_notes
+    role: gate
+    detail: "every approved instrument in theme_r2 has a non-empty conviction_note"
+    sql: >
+      SELECT COUNT(*) FROM fin_theme_instruments
+      WHERE theme_key = 'theme_r2'
+      AND status = 'approved'
+      AND (conviction_note IS NULL OR length(trim(conviction_note)) = 0)
+    expect: 0    # zero approved instruments missing a conviction note
+
+  - id: outcome.conviction_scores_correct
+    role: gate
+    detail: "JNJ=4, PG=4, KO=3 (task explicitly states scores; no drift allowed)"
+    sql: >
+      SELECT ticker, conviction FROM fin_theme_instruments
+      WHERE theme_key = 'theme_r2'
+      AND status = 'approved'
+      ORDER BY ticker
+    expect:
+      - ["JNJ", 4]
+      - ["KO", 3]
+      - ["PG", 4]
+
+  - id: outcome.no_strategy_mutation
+    role: gate
+    detail: "research tools must not create any fin_strategy_instruments rows"
+    sql: "SELECT COUNT(*) FROM fin_strategy_instruments"
+    expect: 0
+
+  - id: trajectory.tool_sequence
+    role: track
+    detail: >
+      Expected tool sequence: set_theme → map_instruments → review_instrument ×3.
+      Track to confirm agent does not skip map_instruments and call review_instrument
+      directly (which would raise LookupError since the instruments are not yet attached).
+
+provenance: >
+  Spec §10 R2 — create theme, map 3 instruments, review each with conviction+note.
+  Authored from real tool output (set_theme, map_instruments, review_instrument).
+  §5.3 balanced-task check: passing variant exercises the full happy-path flow;
+  R11 covers the conviction-without-note rejection failure mode.
+
+ambiguity_notes:
+  - |
+    INITIAL AMBIGUITY: "Map 3 instruments with conviction+note" — does this mean
+    map_instruments with conviction+note inline, or map then review separately?
+    FIX: the prompt separates the two actions (map as candidates, then review to
+    approve). Both paths are valid: map_instruments accepts conviction+status
+    inline, and review_instrument updates them later. The graders check only final
+    state, not tool ordering. The trajectory grader tracks the sequence to confirm
+    the agent doesn't call review_instrument without a prior mapping.
+
+  - |
+    INITIAL AMBIGUITY: conviction vs conviction_note vs rationale — three separate
+    fields that are easily confused. FIX: prompt explicitly names each and the
+    grader checks that all approved instruments have non-empty conviction_note
+    (the field rejected by the tool without it). rationale goes to the note field;
+    conviction_note is the separate mandatory companion to the numeric score.
+
+  - |
+    INITIAL AMBIGUITY: does "review each instrument" imply a separate
+    review_instrument call per ticker, or can map_instruments handle it in one
+    call? Both paths produce the same final DB state. FIX: graders check only
+    final state; transcript shows which path the agent chose.
+
+  - |
+    INITIAL AMBIGUITY: should the theme be created before or after the instruments
+    are mapped? map_instruments raises LookupError if the theme doesn't exist.
+    FIX: prompt explicitly calls out set_theme first; the task ordering is
+    unambiguous. The trajectory grader flags if the agent attempts map_instruments
+    before set_theme.

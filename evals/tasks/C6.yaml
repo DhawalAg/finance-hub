@@ -1,0 +1,157 @@
+id: C6
+title: "Chain: research → promotion → plan for a new theme from scratch"
+version: "1"
+suite: capability
+workflow: chain
+fixture: new_theme_chain
+  # Fresh DB with price bars and a portfolio snapshot but no themes, instruments,
+  # or strategy. The agent builds the full research → promotion → plan chain.
+  #
+  # What the fixture contains:
+  #   - fin_themes: 0 rows (no themes — agent creates them)
+  #   - fin_instruments: 0 rows (no instruments — agent maps them)
+  #   - fin_strategy_versions: 0 rows (no strategy — agent promotes)
+  #   - fin_price_bars: VTI ($242.00) + AAPL ($185.00) on 2026-06-22
+  #   - fin_portfolio_snapshots: snap_c6_fixture (as_of 2026-06-20T16:00:00+00:00)
+  #   - fin_portfolio_positions: VTI (25 sh, $6,052.50) + AAPL (10 sh, $1,850.00)
+  #   - workspace/research/instruments/: empty dir (agent creates notes)
+now: "2026-06-23T12:00:00+00:00"
+
+prompt: |
+  Starting from a clean slate, build the full research → strategy → plan chain for a new
+  "Quality Compounders" theme with two instruments: VTI (broad_market_etf) and AAPL (single_stock).
+
+  Steps:
+  1. Create the theme: key="theme_c6", display_name="Quality Compounders" via finance.set_theme.
+  2. Map the instruments into the theme via finance.map_instruments (both as 'candidate').
+  3. Review and approve VTI via finance.review_instrument (conviction=5, role=broad_market_etf).
+  4. Review and approve AAPL via finance.review_instrument (conviction=4, role=single_stock).
+     Also write an AAPL thesis note via finance.set_research_note.
+  5. Promote to a strategy: version_id="strat_c6_v1", sleeves: broad_market 70% / single_stock 30%,
+     mapping VTI → broad_market, AAPL → single_stock. Use finance.promote_to_strategy.
+  6. Activate the strategy via finance.activate_strategy.
+  7. Generate a DCA deployment plan for snap_c6_fixture with $500 deployable cash.
+     Use finance.generate_deployment_plan.
+
+  Report: the plan's DCA lines and the total allocated amount.
+
+reference:
+  description: >
+    The agent executes the full research → promotion → plan chain. VTI and AAPL are
+    mapped as candidates, reviewed and approved, promoted to strat_c6_v1 with a 70/30
+    sleeve split, the strategy is activated, and a DCA plan is generated for snap_c6_fixture.
+    The plan is a deployment_draft (fresh snapshot) with DCA lines for VTI and AAPL.
+
+  chain:
+    theme: "theme_c6"
+    strategy: "strat_c6_v1"
+    snapshot: "snap_c6_fixture"
+    deployable_cash: "$500"
+
+  db_assertions:
+    - id: theme_exists
+      sql: "SELECT COUNT(*) FROM fin_themes WHERE key = 'theme_c6'"
+      expect: 1
+
+    - id: instruments_approved
+      sql: "SELECT COUNT(*) FROM fin_theme_instruments WHERE status = 'approved'"
+      expect_min: 2
+
+    - id: strategy_active
+      sql: "SELECT COUNT(*) FROM fin_strategy_versions WHERE status = 'active'"
+      expect: 1
+
+    - id: plan_generated
+      sql: "SELECT COUNT(*) FROM fin_deployment_plans"
+      expect: 1
+
+graders:
+  - id: outcome.theme_created
+    role: gate
+    detail: "theme_c6 exists in fin_themes after the chain"
+    sql: "SELECT COUNT(*) FROM fin_themes WHERE key = 'theme_c6'"
+    expect: 1
+
+  - id: outcome.instruments_approved
+    role: gate
+    detail: "at least 2 instruments approved in theme_c6 (VTI + AAPL)"
+    sql: >
+      SELECT CASE WHEN COUNT(*) >= 2 THEN 1 ELSE 0 END
+      FROM fin_theme_instruments
+      WHERE theme_key = 'theme_c6' AND status = 'approved'
+    expect: 1
+
+  - id: outcome.strategy_active
+    role: gate
+    detail: "exactly 1 active strategy version exists after promotion + activation"
+    sql: "SELECT COUNT(*) FROM fin_strategy_versions WHERE status = 'active'"
+    expect: 1
+
+  - id: outcome.plan_generated
+    role: gate
+    detail: "at least 1 deployment plan exists in fin_deployment_plans after the chain"
+    sql: "SELECT COUNT(*) FROM fin_deployment_plans"
+    expect: 1
+
+  - id: outcome.plan_is_deployment_draft
+    role: gate
+    detail: "plan is a deployment_draft (fresh snap_c6_fixture within 7-day window)"
+    sql: "SELECT output_mode FROM fin_deployment_plans LIMIT 1"
+    expect: "deployment_draft"
+
+  - id: outcome.plan_has_dca_lines
+    role: gate
+    detail: "plan has at least 1 DCA line"
+    sql: >
+      SELECT CASE WHEN COUNT(*) >= 1 THEN 1 ELSE 0 END
+      FROM fin_deployment_plan_lines WHERE bucket = 'dca'
+    expect: 1
+
+  - id: trajectory.promote_to_strategy_called
+    role: track
+    detail: "agent called finance.promote_to_strategy (chain includes promotion)"
+
+  - id: trajectory.generate_deployment_plan_called
+    role: track
+    detail: "agent called finance.generate_deployment_plan (full chain completed)"
+
+  - id: trajectory.review_instrument_called
+    role: track
+    detail: "agent called finance.review_instrument for at least one candidate (approval step)"
+
+provenance: >
+  Spec §10 C6 — chain capability: research → promotion → plan for a new theme from scratch.
+  ADR 0006 (capability task): witnessed-run bar; golden transcript deferred to
+  migration-to-regression moment. Frontier expected to start low (6-step chain is demanding).
+  Issue #50 — Phase 4 capability frontier: C4/C5/C6/C8.
+
+ambiguity_notes:
+  - |
+    INITIAL AMBIGUITY: must the agent follow the 7-step order exactly, or can steps be
+    reordered? FIX: gate graders check end state (theme exists, instruments approved,
+    strategy active, plan generated). The chain order is enforced by the tool contracts
+    themselves — promote_to_strategy requires approved instruments, generate_deployment_plan
+    requires an active strategy + snapshot. If the agent reorders steps, the tools will
+    raise and the agent should recover.
+
+  - |
+    INITIAL AMBIGUITY: the prompt says step 4 includes writing a thesis note for AAPL.
+    Is this required for the plan to generate? FIX: for DCA-only plans, single_stock
+    instruments require a thesis note (MISSING_THESIS_NOTE gap otherwise). Including
+    set_research_note for AAPL is necessary to avoid this gap. The graders do not
+    directly check the thesis file — they check the plan outcome, which implicitly
+    requires DCA eligibility.
+
+  - |
+    INITIAL AMBIGUITY: snap_c6_fixture has as_of=2026-06-20; with now=2026-06-23,
+    that is 3 days old — within the 7-day freshness window (deployment_draft tier).
+    FIX: outcome.plan_is_deployment_draft gates on output_mode='deployment_draft'.
+    If the agent uses a different snapshot or the snapshot is stale, this gate will
+    fail (expected frontier behavior).
+
+  - |
+    INITIAL AMBIGUITY: VTI (broad_market_etf) does not require a thesis note for DCA
+    eligibility; AAPL (single_stock) does. If the agent skips the AAPL note, the plan
+    may not include AAPL DCA lines. FIX: outcome.plan_has_dca_lines only requires ≥1
+    DCA line — a VTI-only plan still passes this gate. Full coverage (both instruments)
+    is a golden-transcript concern, deferred to migration to regression.

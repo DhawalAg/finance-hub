@@ -20,8 +20,12 @@ explicitly. They never read the clock inside their bodies.
 """
 from __future__ import annotations
 
+import logging
+import os
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional, Protocol, runtime_checkable
+
+_log = logging.getLogger(__name__)
 
 
 @runtime_checkable
@@ -32,6 +36,14 @@ class Clock(Protocol):
 class _SystemClock:
     def now(self) -> datetime:
         return datetime.now(timezone.utc)
+
+
+class _FixedClock:
+    def __init__(self, instant: datetime) -> None:
+        self._instant = instant
+
+    def now(self) -> datetime:
+        return self._instant
 
 
 _price_provider: Optional[Any] = None
@@ -95,10 +107,39 @@ def get_clock() -> Clock:
     return _clock
 
 
+def _apply_env_clock() -> None:
+    """Read FINANCE_HUB_NOW and pin the clock if set; fail fast if unparseable.
+
+    Precedent: FINANCE_HUB_DB front door in store/connection.py.
+    Semantics: frozen instant — every now() call returns the same pinned time.
+    Parsing: ISO-8601 accepted; bare date → midnight UTC; naive datetime → UTC.
+    """
+    global _clock
+    raw = os.environ.get("FINANCE_HUB_NOW")
+    if raw is None:
+        _clock = _SystemClock()
+        return
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError:
+        raise ValueError(
+            f"FINANCE_HUB_NOW={raw!r} is not a valid ISO-8601 datetime or date"
+        ) from None
+    if dt.tzinfo is None:
+        # bare date (parsed as midnight) and naive datetimes both → assume UTC
+        dt = dt.replace(tzinfo=timezone.utc)
+    _log.warning("clock frozen at %s via FINANCE_HUB_NOW", dt.isoformat())
+    _clock = _FixedClock(dt)
+
+
 def reset() -> None:
-    """Clear injected providers/factories and restore the system clock."""
-    global _price_provider, _price_provider_factory, _fundamentals_provider, _clock
+    """Clear injected providers/factories and restore the env-appropriate clock."""
+    global _price_provider, _price_provider_factory, _fundamentals_provider
     _price_provider = None
     _price_provider_factory = None
     _fundamentals_provider = None
-    _clock = _SystemClock()
+    _apply_env_clock()
+
+
+# Apply env clock at module load so FINANCE_HUB_NOW is honoured from process start.
+_apply_env_clock()

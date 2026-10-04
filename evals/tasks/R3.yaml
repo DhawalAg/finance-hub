@@ -1,0 +1,153 @@
+id: R3
+title: "Write AAPL instrument thesis note — stored, linked, and judge-graded for quality"
+version: "1"
+suite: regression
+workflow: research
+fixture: instrument_candidate_aapl
+  # DB seeded with:
+  #   - fin_instruments: AAPL (stock/single_stock, display_name="Apple Inc", note_path=null)
+  #   - fin_themes: theme_r3 (status=watching, display_name="Quality Growth")
+  #   - fin_theme_instruments: AAPL attached to theme_r3 with status=candidate
+  #   - fin_research_sources: none yet (agent must upsert sources)
+  # NOT pre-seeded: thesis note, source links.
+  # Workspace: workspace/research/instruments/ directory exists but is empty.
+now: "2026-07-01T12:00:00+00:00"
+
+prompt: |
+  Write a research thesis note for Apple Inc (ticker: AAPL) as a candidate instrument in
+  the finance hub store.
+
+  The thesis must:
+  - Be a substantive markdown document (at least 200 words) making a concrete case for or
+    against AAPL as a long-term portfolio holding.
+  - Cover the following topics: revenue growth trajectory, Services segment margin profile,
+    competitive moat (ecosystem/switching costs), capital return program (buybacks +
+    dividends), and key risks.
+  - Cite at least two sources. Register each source with finance.upsert_source and link it
+    to AAPL with finance.link_source before writing the note.
+  - Store the note using finance.set_research_note with scope="instrument" and key="AAPL".
+
+  After storing the note, confirm the note path and the source IDs that support it.
+
+reference:
+  description: >
+    The agent writes and stores a thesis note for AAPL. Success requires: (1) the note
+    file exists in the workspace and fin_instruments.note_path is updated, (2) at least 2
+    active source links are registered in fin_research_source_links for AAPL, and (3) the
+    note's prose meets the rubric for groundedness, coverage of required topics, and source
+    quality. The deterministic graders gate on storage; the LLM-judge grader flags on prose
+    quality.
+
+  # Deterministic outcome assertions
+  assertions:
+    - id: note_file_stored
+      description: "workspace/research/instruments/AAPL.md exists and is non-empty (≥200 chars)"
+      check: "workspace('research/instruments/AAPL.md').size >= 200"
+
+    - id: note_path_set_in_db
+      description: "fin_instruments.note_path is 'research/instruments/AAPL.md'"
+      sql: >
+        SELECT COUNT(*) FROM fin_instruments
+        WHERE ticker = 'AAPL'
+        AND note_path = 'research/instruments/AAPL.md'
+      expect: 1
+
+    - id: at_least_two_active_source_links
+      description: "fin_research_source_links has ≥2 active rows for scope=instrument, key=AAPL"
+      sql: >
+        SELECT COUNT(*) FROM fin_research_source_links
+        WHERE scope = 'instrument'
+        AND key = 'AAPL'
+        AND status = 'active'
+      expect_min: 2    # ≥2 (note: grader checks ≥, not ==)
+
+    - id: sources_have_urls
+      description: "all linked sources have a non-null URL in fin_research_sources"
+      sql: >
+        SELECT COUNT(*) FROM fin_research_sources rs
+        JOIN fin_research_source_links rl ON rs.id = rl.source_id
+        WHERE rl.scope = 'instrument'
+        AND rl.key = 'AAPL'
+        AND rl.status = 'active'
+        AND (rs.url IS NULL OR length(trim(rs.url)) = 0)
+      expect: 0
+
+graders:
+  # Deterministic gates — run first (cheapest; §6 ordering principle)
+  - id: outcome.note_file_stored
+    role: gate
+
+  - id: outcome.note_path_set_in_db
+    role: gate
+
+  - id: outcome.at_least_two_active_source_links
+    role: gate
+
+  - id: outcome.sources_have_urls
+    role: gate
+
+  # LLM-judge grader — runs only if all deterministic gates pass (§6.3)
+  - id: judge.thesis_quality
+    role: flag   # verdicts below threshold FLAG, they do not gate (§6.3)
+    judge_model: "claude-sonnet-5"
+    rubric: "rubrics/thesis_quality_v1.yaml"
+    rubric_version: "1"
+    dimensions:
+      - groundedness
+      - coverage
+      - source_quality
+    coverage_key_facts:
+      # The thesis MUST address each of these facts for coverage=PASS.
+      # Judge checks presence of substance, not exact wording.
+      - "Apple's revenue growth trajectory over the past 5 years (CAGR or trend)"
+      - "Services segment: margin profile vs hardware, revenue growth rate"
+      - "Competitive moat: ecosystem lock-in and/or switching costs mechanism"
+      - "Capital return program: scale of buybacks and/or dividend consistency"
+      - "At least one material risk (e.g. regulatory, China exposure, growth saturation)"
+    flag_threshold: "any dimension score < 3/5"
+    call_shape: >
+      One judge call per trial, returning structured verdict with separate score (1-5)
+      and justification per dimension. Results stored per-dimension in the results
+      store regardless of call structure (§6.3).
+
+provenance: >
+  Spec §10 R3 — write instrument thesis note; verify stored and linked.
+  Format-stresser: exercises the §5.1 graders field with rubric-parameterized judge config
+  (§6.3: rubric refs, dimensions, coverage key-facts list). Golden run deferred to #42.
+
+ambiguity_notes:
+  - |
+    INITIAL AMBIGUITY: "Write instrument thesis note; verify note stored and linked"
+    — linked to what? The spec has two link concepts: fin_instruments.note_path (the
+    note file link) and fin_research_source_links (source citations backing the note).
+    FIX: two separate graders — outcome.note_path_set_in_db checks the instrument row's
+    note_path; outcome.at_least_two_active_source_links checks source citation rows.
+
+  - |
+    INITIAL AMBIGUITY: does "linked" mean the source is linked to AAPL as an instrument,
+    or to the thesis note file, or to the theme? FIX: scope='instrument', key='AAPL' in
+    fin_research_source_links is the grader target. Theme-scoped links for theme_r3 do
+    not count toward the 2-source minimum for this task (the instrument needs its own
+    evidence).
+
+  - |
+    INITIAL AMBIGUITY: judge.thesis_quality — what does "the note is grounded" mean?
+    The §6.3 groundedness dimension is: every material claim is supported by a linked
+    source or evidence reference. But the judge cannot verify that inline citations
+    (e.g. "[source:2]") resolve to actual source IDs without tool access. FIX: the
+    rubric instructs the judge to check that cited claims have corresponding source IDs
+    registered in the DB (the deterministic grader already confirmed sources exist; the
+    judge assesses whether the prose claims are actually supported by those sources).
+
+  - |
+    INITIAL AMBIGUITY: what score triggers the flag? FIX: flag_threshold is "any
+    dimension score < 3/5" — below the middle of the 1–5 scale. This is a first-pass
+    calibration point; the threshold will be tuned at Phase 3 calibration (§11) once
+    the judge runs against real transcripts with SME verdicts.
+
+  - |
+    INITIAL AMBIGUITY: the prompt instructs the agent to call finance.upsert_source
+    and finance.link_source before writing the note. An agent might write the note first
+    and add sources after. FIX: the graders check final state only (links exist at the
+    end of the trial), not transcript ordering. The trajectory grader (if added later)
+    can track ordering as a track metric, but it is not a gate here.
