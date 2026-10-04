@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "finance-hub": {
-      "command": "finance-mcp"
+      "command": "py3env/bin/finance-mcp"
     }
   }
 }

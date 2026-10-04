@@ -12,6 +12,12 @@
 # Format: one path per line, relative to repo root.
 # Empty lines and lines starting with '#' are ignored.
 #
+# Load paths: entries land at <trial>/<path>.  Claude Code reads project context
+# only from <cwd>/CLAUDE.md, so the runner (runner.bridge_project_context) links
+# <trial>/CLAUDE.md -> runtime/CLAUDE.md before launch.  runtime/mcp.json names
+# the server by a repo-relative command (py3env/bin/finance-mcp); the runner
+# anchors it to the repo root (runner.resolve_mcp_servers).
+#
 # Audit note — root CLAUDE.md:
 #   The root CLAUDE.md is a symlink to AGENTS.md. Its 27-line content is entirely
 #   dev scaffolding: issue-tracker instructions, triage-label vocabulary, py3env

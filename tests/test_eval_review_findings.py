@@ -188,7 +188,6 @@ def _cli_env(tmp_path):
     return TrialEnv(cwd=tmp_path, env={}, mcp_servers={}, model="m")
 
 
-@open_finding("f6")
 def test_f6_cli_transcript_readable_by_graders(tmp_path):
     script, _ = _fake_cli(tmp_path)
     t = asyncio.run(CLIRunner(str(script)).run("p", _cli_env(tmp_path)))
@@ -196,7 +195,6 @@ def test_f6_cli_transcript_readable_by_graders(tmp_path):
     assert tool_called("finance.promote_to_strategy"), "graders see empty transcript from CLIRunner"
 
 
-@open_finding("f6")
 def test_f6_cli_respects_setting_sources(tmp_path):
     script, argv_file = _fake_cli(tmp_path)
     asyncio.run(CLIRunner(str(script)).run("p", _cli_env(tmp_path)))
@@ -258,7 +256,6 @@ def test_cut1_zero_gate_semantics_consistent():
     assert harness._trial_gate_pass([]) == compose_verdict([]).task_passes_gates
 
 
-@open_finding("cut2")
 def test_cut2_mcp_json_uses_py3env_interpreter():
     cmd = json.loads((REPO / "runtime" / "mcp.json").read_text())["mcpServers"]["finance-hub"]["command"]
     assert "py3env" in cmd, f"command {cmd!r} resolves via PATH (not py3env)"
@@ -272,7 +269,6 @@ def test_cut3_judge_skip_rows_fall_back_to_rubric_dims():
     assert len(rows) == len(RUBRIC_DIMS), f"got {len(rows)} judge skip rows"
 
 
-@open_finding("cut4")
 @pytest.mark.parametrize("golden", sorted((REPO / "evals" / "tasks").glob("*/golden/transcript.jsonl")),
                          ids=lambda p: p.parts[-3])
 def test_cut4_golden_transcript_parses(golden):

@@ -300,7 +300,8 @@ class TestSDKRunner:
         opts = captured_options[0]
         assert opts.cwd == tmp_path
         assert opts.env["FINANCE_HUB_DB"] == str(tmp_path / "db.sqlite")
-        assert "ANTHROPIC_API_KEY" not in opts.env
+        # Blanked (not absent): the SDK merges os.environ under options.env.
+        assert opts.env["ANTHROPIC_API_KEY"] == ""
 
     def test_sdk_runner_passes_model_and_max_turns(self, tmp_path):
         from evals.harness.sdk_runner import SDKRunner
@@ -356,3 +357,318 @@ class TestCLIRunner:
 
         runner = CLIRunner(cli_path="/usr/local/bin/claude")
         assert runner.cli_path == "/usr/local/bin/claude"
+
+
+# ---------------------------------------------------------------------------
+# Trial lockdown — only the finance-hub MCP tools are reachable
+# ---------------------------------------------------------------------------
+
+# Seen in the 2026-10-04 ground-truth trial before the lockdown: built-ins that can
+# exfiltrate, mutate the host, or act on the user's behalf.
+_DANGEROUS_TOOLS = {
+    "Bash", "Write", "Edit", "NotebookEdit", "WebFetch", "WebSearch", "Task",
+    "CronCreate", "RemoteTrigger", "PushNotification", "Workflow", "SendMessage",
+    "Read", "Skill",
+}
+
+
+def _lockdown_env(tmp_path, **kw):
+    return TrialEnv(
+        cwd=tmp_path,
+        env={"FINANCE_HUB_DB": str(tmp_path / "db.sqlite")},
+        mcp_servers={"finance-hub": {"command": "py3env/bin/finance-mcp",
+                                     "env": {"FINANCE_HUB_DB": str(tmp_path / "db.sqlite")}}},
+        model="claude-sonnet-5",
+        **kw,
+    )
+
+
+class TestSDKLockdown:
+    def _opts(self, tmp_path):
+        from evals.harness.sdk_runner import build_options
+        return build_options(_lockdown_env(tmp_path))
+
+    def _argv(self, tmp_path):
+        from claude_agent_sdk._internal.transport.subprocess_cli import SubprocessCLITransport
+        import dataclasses
+        opts = dataclasses.replace(self._opts(tmp_path), cli_path="claude")  # skip CLI discovery
+        return SubprocessCLITransport(prompt="p", options=opts)._build_command()
+
+    def test_builtin_tools_restricted_to_toolsearch(self, tmp_path):
+        opts = self._opts(tmp_path)
+        assert opts.tools == ["ToolSearch"]
+        assert not _DANGEROUS_TOOLS & set(opts.tools)
+
+    def test_only_trial_mcp_servers_preapproved(self, tmp_path):
+        opts = self._opts(tmp_path)
+        assert opts.allowed_tools == ["ToolSearch", "mcp__finance-hub"]
+        assert not _DANGEROUS_TOOLS & set(opts.allowed_tools)
+
+    def test_permission_mode_denies_unapproved_tools(self, tmp_path):
+        assert self._opts(tmp_path).permission_mode == "dontAsk"
+
+    def test_parent_process_api_key_masked(self, tmp_path, monkeypatch):
+        """SDK merges os.environ under options.env — only an explicit blank masks it."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-leak")
+        assert self._opts(tmp_path).env["ANTHROPIC_API_KEY"] == ""
+
+    def test_strict_mcp_config_and_connectors_disabled(self, tmp_path):
+        opts = self._opts(tmp_path)
+        assert opts.strict_mcp_config is True
+        assert opts.env["ENABLE_CLAUDEAI_MCP_SERVERS"] == "false"
+        assert opts.env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] == "1"
+        assert set(opts.mcp_servers) == {"finance-hub"}
+
+    def test_cli_argv_built_by_sdk_carries_lockdown(self, tmp_path):
+        argv = self._argv(tmp_path)
+        assert argv[argv.index("--tools") + 1] == "ToolSearch"
+        assert argv[argv.index("--allowedTools") + 1] == "ToolSearch,mcp__finance-hub"
+        assert argv[argv.index("--permission-mode") + 1] == "dontAsk"
+        assert "--strict-mcp-config" in argv
+        assert "--setting-sources=project" in argv
+        assert "bypassPermissions" not in argv
+        assert "--dangerously-skip-permissions" not in argv
+        mcp = json.loads(argv[argv.index("--mcp-config") + 1])["mcpServers"]
+        assert set(mcp) == {"finance-hub"}
+
+    def test_mcp_command_resolved_to_repo_py3env(self, tmp_path):
+        from evals.harness.runner import _REPO_ROOT
+        cmd = self._opts(tmp_path).mcp_servers["finance-hub"]["command"]
+        assert cmd == str(_REPO_ROOT / "py3env" / "bin" / "finance-mcp")
+
+
+class TestResolveMcpServers:
+    def test_relative_path_command_anchored_to_root(self, tmp_path):
+        from evals.harness.runner import resolve_mcp_servers
+        out = resolve_mcp_servers({"s": {"command": "py3env/bin/x", "env": {"A": "1"}}}, root=tmp_path)
+        assert out == {"s": {"command": str(tmp_path / "py3env/bin/x"), "env": {"A": "1"}}}
+
+    def test_bare_and_absolute_commands_unchanged(self, tmp_path):
+        from evals.harness.runner import resolve_mcp_servers
+        servers = {"a": {"command": "finance-mcp"}, "b": {"command": "/usr/bin/x"}}
+        assert resolve_mcp_servers(servers, root=tmp_path) == servers
+
+    def test_input_not_mutated(self, tmp_path):
+        from evals.harness.runner import resolve_mcp_servers
+        servers = {"s": {"command": "py3env/bin/x"}}
+        resolve_mcp_servers(servers, root=tmp_path)
+        assert servers == {"s": {"command": "py3env/bin/x"}}
+
+    def test_runtime_mcp_json_command_resolves_to_py3env_executable(self):
+        """The shipped runtime/mcp.json must start the repo's py3env finance-mcp in a trial."""
+        from evals.harness.runner import _REPO_ROOT, resolve_mcp_servers
+        raw = json.loads((_REPO_ROOT / "runtime" / "mcp.json").read_text())["mcpServers"]
+        cmd = Path(resolve_mcp_servers(raw)["finance-hub"]["command"])
+        assert cmd.is_absolute() and "py3env" in cmd.parts
+        assert cmd.exists(), f"{cmd} missing — trial MCP server would fail to start"
+
+
+class TestBridgeProjectContext:
+    def test_runtime_claude_md_exposed_at_trial_root(self, tmp_path):
+        from evals.harness.runner import bridge_project_context
+        (tmp_path / "runtime").mkdir()
+        (tmp_path / "runtime" / "CLAUDE.md").write_text("# runtime")
+        bridge_project_context(tmp_path)
+        assert (tmp_path / "CLAUDE.md").read_text() == "# runtime"
+        assert (tmp_path / "CLAUDE.md").is_symlink()
+
+    def test_noop_without_runtime_claude_md(self, tmp_path):
+        from evals.harness.runner import bridge_project_context
+        bridge_project_context(tmp_path)
+        assert not (tmp_path / "CLAUDE.md").exists()
+
+    def test_existing_root_claude_md_untouched(self, tmp_path):
+        from evals.harness.runner import bridge_project_context
+        (tmp_path / "runtime").mkdir()
+        (tmp_path / "runtime" / "CLAUDE.md").write_text("# runtime")
+        (tmp_path / "CLAUDE.md").write_text("# root")
+        bridge_project_context(tmp_path)
+        assert (tmp_path / "CLAUDE.md").read_text() == "# root"
+
+    def test_idempotent(self, tmp_path):
+        from evals.harness.runner import bridge_project_context
+        (tmp_path / "runtime").mkdir()
+        (tmp_path / "runtime" / "CLAUDE.md").write_text("# runtime")
+        bridge_project_context(tmp_path)
+        bridge_project_context(tmp_path)
+        assert (tmp_path / "CLAUDE.md").read_text() == "# runtime"
+
+    def test_sdk_runner_bridges_before_query(self, tmp_path):
+        from evals.harness.sdk_runner import SDKRunner
+        (tmp_path / "runtime").mkdir()
+        (tmp_path / "runtime" / "CLAUDE.md").write_text("# runtime")
+        seen = []
+
+        async def fake_query(*, prompt, options=None, transport=None):
+            seen.append((Path(options.cwd) / "CLAUDE.md").exists())
+            return
+            yield
+
+        with patch("evals.harness.sdk_runner.query", side_effect=fake_query):
+            asyncio.run(SDKRunner().run("p", _lockdown_env(tmp_path)))
+        assert seen == [True]
+
+
+# ---------------------------------------------------------------------------
+# SDKRunner — message coverage (system init, rate limits, error flags)
+# ---------------------------------------------------------------------------
+
+class TestSDKRunnerMessageCoverage:
+    def _run(self, tmp_path, msgs):
+        from evals.harness.sdk_runner import SDKRunner
+
+        async def _gen():
+            for m in msgs:
+                yield m
+
+        with patch("evals.harness.sdk_runner.query", return_value=_gen()):
+            return asyncio.run(SDKRunner().run("p", _lockdown_env(tmp_path)))
+
+    def test_system_init_recorded(self, tmp_path):
+        from claude_agent_sdk.types import SystemMessage
+        init = {"type": "system", "subtype": "init", "tools": ["ToolSearch"],
+                "mcp_servers": [{"name": "finance-hub", "status": "pending"}],
+                "apiKeySource": "none", "cwd": str(tmp_path), "permissionMode": "dontAsk"}
+        t = self._run(tmp_path, [SystemMessage(subtype="init", data=init)])
+        assert [e.type for e in t.events] == ["system"]
+        d = t.events[0].data
+        assert d["subtype"] == "init"
+        assert d["tools"] == ["ToolSearch"]
+        assert d["mcp_servers"] == [{"name": "finance-hub", "status": "pending"}]
+        assert d["apiKeySource"] == "none"
+        assert d["cwd"] == str(tmp_path)
+
+    def test_thinking_token_ticks_dropped(self, tmp_path):
+        from claude_agent_sdk.types import SystemMessage
+        t = self._run(tmp_path, [SystemMessage(subtype="thinking_tokens", data={"estimated_tokens": 5})])
+        assert t.events == []
+
+    def test_rate_limit_event_recorded_as_system(self, tmp_path):
+        from claude_agent_sdk.types import RateLimitEvent, RateLimitInfo
+        ev = RateLimitEvent(rate_limit_info=RateLimitInfo(status="allowed"), uuid="u", session_id="s")
+        t = self._run(tmp_path, [ev])
+        assert t.events[0].type == "system"
+        assert t.events[0].data["subtype"] == "rate_limit_event"
+        assert t.events[0].data["rate_limit_info"]["status"] == "allowed"
+
+    def test_tool_result_is_error_none_becomes_false(self, tmp_path):
+        from claude_agent_sdk.types import ToolResultBlock, UserMessage
+        msg = UserMessage(content=[ToolResultBlock(tool_use_id="t", content=[{"type": "text", "text": "{}"}],
+                                                   is_error=None)])
+        t = self._run(tmp_path, [msg])
+        assert t.events[0].data["content"][0]["is_error"] is False
+
+    def test_assistant_stop_reason_and_error_recorded(self, tmp_path):
+        from claude_agent_sdk.types import AssistantMessage, TextBlock, ThinkingBlock
+        msg = AssistantMessage(content=[ThinkingBlock(thinking="", signature="sig"), TextBlock(text="hi")],
+                               model="m", stop_reason="end_turn", error=None, message_id="msg_1")
+        d = self._run(tmp_path, [msg]).events[0].data
+        assert d["stop_reason"] == "end_turn"
+        assert d["error"] is None
+        assert d["message_id"] == "msg_1"
+        assert d["content"] == [{"type": "thinking"}, {"type": "text", "text": "hi"}]
+
+    def test_transcript_with_system_events_roundtrips(self, tmp_path):
+        from claude_agent_sdk.types import SystemMessage
+        t = self._run(tmp_path, [SystemMessage(subtype="init", data={"tools": []})])
+        p = tmp_path / "t.jsonl"
+        t.write_jsonl(p)
+        assert Transcript.read_jsonl(p).events[0].data == {"tools": [], "subtype": "init"}
+
+
+# ---------------------------------------------------------------------------
+# CLIRunner — lockdown argv/env and stream-json → SDK event shape
+# ---------------------------------------------------------------------------
+
+def _fake_cli(tmp_path, lines):
+    import stat
+    import sys
+    import textwrap
+    dump = tmp_path / "invocation.json"
+    script = tmp_path / "fake_claude"
+    script.write_text(textwrap.dedent(f"""\
+        #!{sys.executable}
+        import json, os, sys
+        keys = ("ENABLE_CLAUDEAI_MCP_SERVERS", "CLAUDE_CODE_DISABLE_AUTO_MEMORY", "ANTHROPIC_API_KEY")
+        json.dump({{"argv": sys.argv, "env": {{k: os.environ.get(k) for k in keys}}}},
+                  open({str(dump)!r}, "w"))
+        for l in json.loads({json.dumps(lines)!r}):
+            print(json.dumps(l))
+        """))
+    script.chmod(script.stat().st_mode | stat.S_IEXEC)
+    return script, dump
+
+
+_STREAM_JSON = [
+    {"type": "system", "subtype": "init", "tools": ["ToolSearch"], "apiKeySource": "none",
+     "mcp_servers": [{"name": "finance-hub", "status": "pending"}], "session_id": "s"},
+    {"type": "system", "subtype": "thinking_tokens", "estimated_tokens": 3},
+    {"type": "assistant", "parent_tool_use_id": None, "session_id": "s", "message": {
+        "id": "msg_1", "model": "m", "stop_reason": "tool_use", "usage": {"output_tokens": 1},
+        "content": [{"type": "thinking", "thinking": "", "signature": "x"},
+                    {"type": "tool_use", "id": "t1", "name": "mcp__finance-hub__health", "input": {}}]}},
+    {"type": "user", "session_id": "s", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "t1", "content": [{"type": "text", "text": "{}"}]}]}},
+    {"type": "result", "subtype": "success", "num_turns": 2, "total_cost_usd": 0.01, "is_error": False},
+]
+
+
+class TestCLIRunnerLockdown:
+    def _run(self, tmp_path):
+        from evals.harness.cli_runner import CLIRunner
+        script, dump = _fake_cli(tmp_path, _STREAM_JSON)
+        t = asyncio.run(CLIRunner(str(script)).run("p", _lockdown_env(tmp_path)))
+        return t, json.loads(dump.read_text())
+
+    def test_argv_carries_lockdown(self, tmp_path):
+        _, inv = self._run(tmp_path)
+        argv = inv["argv"]
+        assert argv[argv.index("--tools") + 1] == "ToolSearch"
+        assert argv[argv.index("--allowedTools") + 1] == "ToolSearch,mcp__finance-hub"
+        assert argv[argv.index("--permission-mode") + 1] == "dontAsk"
+        assert argv[argv.index("--setting-sources") + 1] == "project"
+        assert "--strict-mcp-config" in argv
+        mcp = json.loads(argv[argv.index("--mcp-config") + 1])["mcpServers"]
+        assert set(mcp) == {"finance-hub"}
+        assert Path(mcp["finance-hub"]["command"]).is_absolute()
+
+    def test_env_disables_connectors_and_strips_api_key(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-leak")
+        _, inv = self._run(tmp_path)
+        assert inv["env"] == {"ENABLE_CLAUDEAI_MCP_SERVERS": "false",
+                              "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+                              "ANTHROPIC_API_KEY": ""}
+
+    def test_events_match_sdk_shape(self, tmp_path):
+        t, _ = self._run(tmp_path)
+        assert [e.type for e in t.events] == ["system", "assistant", "user", "result"]
+        init, asst, user, result = (e.data for e in t.events)
+        assert init["subtype"] == "init" and init["tools"] == ["ToolSearch"]
+        assert asst["content"] == [
+            {"type": "thinking"},
+            {"type": "tool_use", "id": "t1", "name": "mcp__finance-hub__health", "input": {}},
+        ]
+        assert asst["model"] == "m" and asst["stop_reason"] == "tool_use" and asst["message_id"] == "msg_1"
+        assert user["content"] == [{"type": "tool_result", "tool_use_id": "t1",
+                                    "content": [{"type": "text", "text": "{}"}], "is_error": False}]
+        assert result["num_turns"] == 2 and t.total_cost_usd == pytest.approx(0.01)
+
+
+# ---------------------------------------------------------------------------
+# Golden transcripts — harness Transcript format
+# ---------------------------------------------------------------------------
+
+_GOLDENS = sorted((Path(__file__).resolve().parent.parent / "evals" / "tasks").glob("*/golden/transcript.jsonl"))
+
+
+@pytest.mark.parametrize("golden", _GOLDENS, ids=lambda p: p.parts[-3])
+def test_golden_transcript_is_harness_format(golden):
+    t = Transcript.read_jsonl(golden)
+    assert {e.type for e in t.events} <= {"system", "user", "assistant"}
+    assert t.events[0].type == "system" and t.events[0].data["subtype"] == "golden_metadata"
+    uses = [b["id"] for e in t.events if e.type == "assistant"
+            for b in e.data["content"] if b["type"] == "tool_use"]
+    results = [b["tool_use_id"] for e in t.events if e.type == "user" and isinstance(e.data["content"], list)
+               for b in e.data["content"] if b["type"] == "tool_result"]
+    assert uses and uses == results, "every tool_use must be answered by its tool_result, in order"
+    assert any(b["type"] == "text" for e in t.events if e.type == "assistant" for b in e.data["content"])
