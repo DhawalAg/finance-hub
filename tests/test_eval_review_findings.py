@@ -255,7 +255,6 @@ def test_f9_sql_gate_with_typoed_expect_key_does_not_pass(tmp_path):
 
 
 # ---------------------------------------------------------------- F10
-@open_finding("f10")
 def test_f10_no_worktree_snapshot_or_nvim_log_tracked():
     out = subprocess.run(["git", "ls-files", ".claude/worktrees", "nvim.log"],
                          cwd=REPO, capture_output=True, text=True).stdout.split()
