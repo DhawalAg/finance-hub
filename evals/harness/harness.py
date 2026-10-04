@@ -6,7 +6,13 @@ grading → run-dir layout (meta.json, trial_N/transcript.jsonl, trial_N/verdict
 → per-run report.
 
 Re-grading (spec §9 req 5): regrade() re-runs graders against stored transcripts
-without re-running trials; appends new rows to trial_N/verdicts.jsonl.
+and the persisted trial_N/workspace/ snapshot without re-running trials; appends new
+rows to trial_N/verdicts.jsonl.
+
+Failure isolation: each trial persists its transcript and workspace before grading,
+and trials are gathered with return_exceptions=True — a trial that raises (runner or
+grader) is recorded in meta.json as {"error": ...} with gate_pass=False, and never
+cancels its siblings or prevents meta.json from being written.
 """
 from __future__ import annotations
 
@@ -23,7 +29,7 @@ from typing import Any
 
 import yaml
 
-from evals.harness.graders import GraderResult, grade
+from evals.harness.graders import GraderResult, gates_pass, grade
 from evals.harness.runner import Runner, Transcript, TrialEnv
 
 _REPO_ROOT = Path(__file__).parent.parent.parent
@@ -178,9 +184,8 @@ def _make_trial_env(
 
 
 def _trial_gate_pass(verdicts: list[GraderResult]) -> bool:
-    """True iff all gate graders in this trial passed."""
-    gate = [v for v in verdicts if v.role == "gate"]
-    return bool(gate) and all(v.verdict == "pass" for v in gate)
+    """True iff this trial passes its gates — delegates to graders.gates_pass."""
+    return gates_pass(verdicts)
 
 
 def _compute_pass_k(all_trial_verdicts: list[list[GraderResult]]) -> bool:
@@ -269,9 +274,13 @@ def _emit_report(
     print(f"Model: {meta['model']}  hash: {meta['prompt_hash'][:12]}…")
     print(f"{'='*64}")
 
+    trial_meta = meta.get("trials", [])
     for i, verdicts in enumerate(all_trial_verdicts):
         transcript_link = str(run_dir / f"trial_{i}" / "transcript.jsonl")
         print(f"\nTrial {i}  [{transcript_link}]")
+        error = trial_meta[i].get("error") if i < len(trial_meta) else None
+        if error:
+            print(f"  ✗ ERROR  {error}")
         for v in verdicts:
             mark = "✓" if v.verdict == "pass" else ("~" if v.verdict == "skip" else "✗")
             print(f"  {mark} [{v.role:5s}] {v.grader_id:<42} {v.verdict.upper()}")
@@ -314,7 +323,17 @@ async def _run_one_trial_async(
     run_dir: Path,
     graded_at: str,
 ) -> tuple[Transcript, list[GraderResult]]:
-    """Run one trial: make env → run → grade → persist to trial_N/ in run_dir."""
+    """Run one trial: make env → run → persist transcript + workspace → grade → persist verdicts.
+
+    The transcript and a copy of the workspace land in trial_N/ BEFORE grading, so a
+    grading exception never loses the (expensive) agent run, and regrade() can later
+    evaluate workspace checks against trial_N/workspace/ (the live workspace is a
+    tmpdir deleted at the end of run()). Workspaces hold only small text artefacts
+    (notes, memos), so the copy is cheap.
+
+    grade() is blocking (sqlite, file IO, and the LLM judge's round-trip), so it runs
+    in a worker thread to keep sibling trials' runner coroutines progressing.
+    """
     trial_env = _make_trial_env(task, trial_dir, fixture_env, model, max_turns, trial_dir)
     transcript = await runner.run(task["prompt"], trial_env)
 
@@ -323,13 +342,16 @@ async def _run_one_trial_async(
     workspace_str = fixture_env.get("FINANCE_HUB_WORKSPACE", str(trial_dir / "workspace"))
     workspace = Path(workspace_str)
 
-    verdicts = grade(transcript, db_path, workspace, task)
-    for v in verdicts:
-        v.graded_at = graded_at
-
     out_dir = run_dir / f"trial_{trial_idx}"
     out_dir.mkdir(parents=True, exist_ok=True)
     transcript.write_jsonl(out_dir / "transcript.jsonl")
+    if workspace.is_dir():
+        shutil.copytree(workspace, out_dir / "workspace", dirs_exist_ok=True)
+
+    verdicts = await asyncio.to_thread(grade, transcript, db_path, workspace, task)
+    for v in verdicts:
+        v.graded_at = graded_at
+
     _write_verdicts_jsonl(out_dir / "verdicts.jsonl", verdicts)
 
     return transcript, verdicts
@@ -344,7 +366,8 @@ async def _gather_trials(
     max_turns: int,
     run_dir: Path,
     graded_at: str,
-) -> list[tuple[Transcript, list[GraderResult]]]:
+) -> list[tuple[Transcript, list[GraderResult]] | BaseException]:
+    """Run all trials concurrently; a failed trial yields its exception in place."""
     coros = [
         _run_one_trial_async(
             i, task, trial_dir, fixture_env,
@@ -352,7 +375,7 @@ async def _gather_trials(
         )
         for i, (trial_dir, fixture_env) in enumerate(zip(trial_dirs, fixture_envs))
     ]
-    return list(await asyncio.gather(*coros))
+    return list(await asyncio.gather(*coros, return_exceptions=True))
 
 
 # ---------------------------------------------------------------------------
@@ -422,7 +445,7 @@ def run(
         graded_at = datetime.now(timezone.utc).isoformat()
 
         # Run k trials concurrently (spec §9 req 3).
-        trial_results: list[tuple[Transcript, list[GraderResult]]] = asyncio.run(
+        trial_outcomes = asyncio.run(
             _gather_trials(
                 task, trial_dirs, trial_fixture_envs,
                 runner, model, max_turns, run_dir, graded_at,
@@ -434,7 +457,29 @@ def run(
 
     finished_at = datetime.now(timezone.utc).isoformat()
 
-    all_trial_verdicts = [verdicts for _, verdicts in trial_results]
+    # A trial that raised has no verdicts (→ gate_pass False) and an error entry in meta.
+    trial_entries: list[dict[str, Any]] = []
+    all_trial_verdicts: list[list[GraderResult]] = []
+    for i, outcome in enumerate(trial_outcomes):
+        if isinstance(outcome, BaseException):
+            verdicts: list[GraderResult] = []
+            entry: dict[str, Any] = {
+                "trial_idx": i,
+                "num_turns": None,
+                "total_cost_usd": None,
+                "gate_pass": False,
+                "error": f"{type(outcome).__name__}: {outcome}",
+            }
+        else:
+            transcript, verdicts = outcome
+            entry = {
+                "trial_idx": i,
+                "num_turns": transcript.num_turns,
+                "total_cost_usd": transcript.total_cost_usd,
+                "gate_pass": _trial_gate_pass(verdicts),
+            }
+        all_trial_verdicts.append(verdicts)
+        trial_entries.append(entry)
     pass_k_result = _compute_pass_k(all_trial_verdicts)
     pass_at_k_result = _compute_pass_at_k(all_trial_verdicts)
 
@@ -455,15 +500,7 @@ def run(
         "finished_at": finished_at,
         "pass_k": pass_k_result,
         "pass_at_k": pass_at_k_result,
-        "trials": [
-            {
-                "trial_idx": i,
-                "num_turns": transcript.num_turns,
-                "total_cost_usd": transcript.total_cost_usd,
-                "gate_pass": _trial_gate_pass(verdicts),
-            }
-            for i, (transcript, verdicts) in enumerate(trial_results)
-        ],
+        "trials": trial_entries,
     }
     (run_dir / "meta.json").write_text(json.dumps(meta, indent=2) + "\n")
 
@@ -478,7 +515,8 @@ def regrade(
 ) -> list[list[GraderResult]]:
     """Re-run graders against stored transcripts; append new rows to verdicts.jsonl.
 
-    check graders: always re-run from stored transcript.
+    check graders: always re-run from stored transcript; workspace checks read the
+      trial_N/workspace/ snapshot persisted by run().
     sql graders: re-run only if db_paths[i] provided; verdict is 'skip' otherwise.
 
     Satisfies spec §9 req 5: grader iteration without re-running the trial (no API call).
@@ -491,10 +529,15 @@ def regrade(
     all_results: list[list[GraderResult]] = []
     for i in range(k):
         trial_dir = run_dir / f"trial_{i}"
-        transcript = Transcript.read_jsonl(trial_dir / "transcript.jsonl")
+        transcript_path = trial_dir / "transcript.jsonl"
+        if not transcript_path.exists():
+            # Trial errored before producing a transcript (see meta.json trials[i].error).
+            all_results.append([])
+            continue
+        transcript = Transcript.read_jsonl(transcript_path)
 
         db_path = db_paths[i] if db_paths and i < len(db_paths) else None
-        workspace = trial_dir
+        workspace = trial_dir / "workspace"
 
         verdicts = grade(transcript, db_path, workspace, task)
         for v in verdicts:

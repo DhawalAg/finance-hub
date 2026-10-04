@@ -2288,6 +2288,10 @@ _JUDGE_SPEC = {
     "flag_threshold": "any dimension score < 3/5",
 }
 
+# A trivially-passing gate: the judge runs only on gate-passing trials, and a trial
+# with zero gate rows does not pass its gates (graders.gates_pass).
+_PASS_GATE = {"id": "outcome.ok", "role": "gate", "check": "True"}
+
 _FAKE_JUDGE_RESPONSE = """{
     "groundedness": {"score": 4, "justification": "Most claims cited; minor gaps."},
     "coverage": {"score": 3, "justification": "Core topics addressed adequately."},
@@ -2420,17 +2424,15 @@ class TestJudgeGrader:
         monkeypatch.setattr(graders_mod, "_invoke_judge", fake_judge)
 
         # Use a spec that names the real rubric file
-        task = {"graders": [_JUDGE_SPEC]}
+        task = {"graders": [_PASS_GATE, _JUDGE_SPEC]}
         grade(Transcript(), None, tmp_path, task)
 
-        # The judge was NOT called because there are no gate graders to pass
-        # (no gates → gates trivially pass → judge runs)
         assert len(calls) == 1
         # The prompt should mention rubric dimensions
         assert "groundedness" in calls[0]
 
-    def test_judge_no_gates_means_trivially_passes(self, tmp_path, monkeypatch):
-        """When there are no gate graders, judge runs (gates trivially pass)."""
+    def test_judge_no_gates_means_skipped(self, tmp_path, monkeypatch):
+        """No gate graders → trial does not pass gates → judge skipped (one rule: gates_pass)."""
         from evals.harness import graders as graders_mod
         from evals.harness.graders import grade
 
@@ -2439,9 +2441,10 @@ class TestJudgeGrader:
 
         task = {"graders": [_JUDGE_SPEC]}
         results = grade(Transcript(), None, tmp_path, task)
-        assert invoked, "Judge should have been invoked when no gates exist"
+        assert not invoked, "Judge must not run when the trial has no gates"
         judge_results = [r for r in results if r.grader_id.startswith("judge.")]
         assert len(judge_results) == 3
+        assert all(r.verdict == "skip" for r in judge_results)
 
     def test_judge_score_stored_in_actual(self, tmp_path, monkeypatch):
         """Each dimension row's actual dict includes the numeric score."""
@@ -2449,7 +2452,7 @@ class TestJudgeGrader:
         from evals.harness.graders import grade
 
         monkeypatch.setattr(graders_mod, "_invoke_judge", lambda p, m: _FAKE_JUDGE_RESPONSE)
-        task = {"graders": [_JUDGE_SPEC]}
+        task = {"graders": [_PASS_GATE, _JUDGE_SPEC]}
         results = grade(Transcript(), None, tmp_path, task)
         by_dim = {r.grader_id.split(".")[-1]: r for r in results if r.grader_id.startswith("judge.")}
         assert by_dim["groundedness"].actual["score"] == 4
@@ -2462,7 +2465,7 @@ class TestJudgeGrader:
         from evals.harness.graders import grade
 
         monkeypatch.setattr(graders_mod, "_invoke_judge", lambda p, m: _FAKE_JUDGE_RESPONSE)
-        task = {"graders": [_JUDGE_SPEC]}
+        task = {"graders": [_PASS_GATE, _JUDGE_SPEC]}
         results = grade(Transcript(), None, tmp_path, task)
         by_dim = {r.grader_id.split(".")[-1]: r for r in results if r.grader_id.startswith("judge.")}
         assert "Most claims cited" in by_dim["groundedness"].detail
@@ -2743,3 +2746,57 @@ class TestC4JudgeGraderDispatch:
         assert rubric["id"] == "theme_brief_quality"
         assert set(rubric["dimensions"].keys()) == {"coverage", "groundedness", "cross_instrument_synthesis"}
         assert all(d.get("flag_below") == 3 for d in rubric["dimensions"].values())
+
+
+# ---------------------------------------------------------------------------
+# Failure isolation (review F3): judge errors become rows; a raising trial
+# neither cancels siblings nor skips meta.json
+# ---------------------------------------------------------------------------
+
+class TestTrialFailureIsolation:
+
+    def test_judge_exception_becomes_per_dimension_fail_rows(self, tmp_path, monkeypatch):
+        from evals.harness import graders as graders_mod
+        from evals.harness.graders import grade
+
+        def boom(prompt, model):
+            raise ConnectionError("judge down")
+
+        monkeypatch.setattr(graders_mod, "_invoke_judge", boom)
+        results = grade(Transcript(), None, tmp_path, {"graders": [_PASS_GATE, _JUDGE_SPEC]})
+        judge_rows = [r for r in results if r.grader_id.startswith("judge.")]
+        assert len(judge_rows) == 3
+        assert all(r.role == "flag" and r.verdict == "fail" for r in judge_rows)
+        assert all("judge down" in r.detail for r in judge_rows)
+        assert all("judge down" in r.actual["judge_error"] for r in judge_rows)
+
+    def test_runner_exception_recorded_in_meta_siblings_persisted(self, tmp_path):
+        import yaml
+        from evals.harness.harness import regrade, run
+
+        class FlakyRunner(Runner):
+            async def run(self, prompt: str, env: TrialEnv) -> Transcript:
+                if Path(env.cwd).name.startswith("trial_TISO_1_"):
+                    raise RuntimeError("sdk crashed")
+                await asyncio.sleep(0.05)
+                return Transcript(events=[TranscriptEvent("result", {"num_turns": 1})])
+
+        task = tmp_path / "T.yaml"
+        task.write_text(yaml.safe_dump({
+            "id": "TISO", "version": 1, "suite": "regression", "prompt": "x",
+            "graders": [_PASS_GATE],
+        }))
+        run_dir = run(task, FlakyRunner(), k=3, results_root=tmp_path / "runs")
+
+        meta = json.loads((run_dir / "meta.json").read_text())
+        t = meta["trials"]
+        assert "sdk crashed" in t[1]["error"] and t[1]["gate_pass"] is False
+        assert t[0]["gate_pass"] is True and t[2]["gate_pass"] is True
+        assert "error" not in t[0]
+        assert meta["pass_k"] is False and meta["pass_at_k"] is True
+        for i in (0, 2):
+            assert (run_dir / f"trial_{i}" / "transcript.jsonl").exists()
+            assert (run_dir / f"trial_{i}" / "workspace").is_dir()
+        # regrade tolerates the trial that never produced a transcript
+        results = regrade(run_dir, task)
+        assert results[1] == [] and results[0][0].verdict == "pass"

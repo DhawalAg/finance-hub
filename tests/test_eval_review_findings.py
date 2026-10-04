@@ -63,14 +63,12 @@ REAL_PROMOTE = "mcp__finance-hub__finance_promote_to_strategy"
 
 
 # ---------------------------------------------------------------- F1
-@open_finding("f1")
 def test_f1_tool_called_matches_real_mcp_name():
     t = _tx(("t1", REAL_PROMOTE, {}, "{}", False))
     tool_called, _, _ = _make_trajectory_helpers(t)
     assert tool_called("finance.promote_to_strategy")
 
 
-@open_finding("f1")
 def test_f1_no_strategy_mutation_gate_catches_real_mcp_name():
     t = _tx(("t1", REAL_PROMOTE, {}, "{}", False))
     r = _traj_no_strategy_mutation_tools("trajectory.no_strategy_mutation_tools", "gate", "", t)
@@ -78,7 +76,6 @@ def test_f1_no_strategy_mutation_gate_catches_real_mcp_name():
 
 
 # ---------------------------------------------------------------- F2
-@open_finding("f2")
 def test_f2_tool_result_attr_on_sdk_text_block_content():
     content = [{"type": "text", "text": json.dumps({"stored": 8})}]
     t = _tx(("t1", "finance.fetch_fundamentals", {}, content, False))
@@ -117,7 +114,6 @@ OK_JUDGE = json.dumps({d: {"score": 5, "justification": "ok"} for d in RUBRIC_DI
 
 
 # ---------------------------------------------------------------- F3
-@open_finding("f3")
 def test_f3_judge_error_does_not_lose_transcripts(tmp_path, monkeypatch):
     calls = {"n": 0}
 
@@ -142,7 +138,6 @@ def test_f3_judge_error_does_not_lose_transcripts(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------- F4
-@open_finding("f4")
 def test_f4_no_invented_prices_accepts_micros_grounded_amount():
     t = _tx(("t1", "finance.get_deployment_plan", {},
              {"amount_micros": 12_345_670_000, "budget": "1000"}, False))
@@ -152,7 +147,6 @@ def test_f4_no_invented_prices_accepts_micros_grounded_amount():
 
 
 # ---------------------------------------------------------------- F5
-@open_finding("f5")
 def test_f5_regrade_preserves_workspace_verdict(tmp_path):
     async def write_memo(env):
         d = Path(env.cwd) / "workspace" / "approved"
@@ -211,7 +205,6 @@ def test_f6_cli_respects_setting_sources(tmp_path):
 
 
 # ---------------------------------------------------------------- F7
-@open_finding("f7")
 def test_f7_tool_result_returns_last_call():
     t = _tx(("t1", "finance.candidate_evidence", {}, "ERROR: transient", True),
             ("t2", "finance.candidate_evidence", {}, {"readiness": {"one_time": True}}, False))
@@ -222,7 +215,6 @@ def test_f7_tool_result_returns_last_call():
 
 
 # ---------------------------------------------------------------- F8
-@open_finding("f8")
 def test_f8_judge_does_not_block_event_loop(tmp_path, monkeypatch):
     def slow_judge(prompt, model):
         time.sleep(1.0)
@@ -262,7 +254,6 @@ def test_f10_no_worktree_snapshot_or_nvim_log_tracked():
 
 
 # ================================================================ cut-by-cap findings
-@open_finding("cut1")
 def test_cut1_zero_gate_semantics_consistent():
     assert harness._trial_gate_pass([]) == compose_verdict([]).task_passes_gates
 
@@ -273,7 +264,6 @@ def test_cut2_mcp_json_uses_py3env_interpreter():
     assert "py3env" in cmd, f"command {cmd!r} resolves via PATH (not py3env)"
 
 
-@open_finding("cut3")
 def test_cut3_judge_skip_rows_fall_back_to_rubric_dims():
     task = {"graders": [{"id": "g", "role": "gate", "check": "False"},
                         {"id": "judge.thesis_quality", "rubric": RUBRIC}]}

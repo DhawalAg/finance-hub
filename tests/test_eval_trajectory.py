@@ -8,6 +8,13 @@ Verdict composition structures gate/track/flag results for reporting.
 """
 from __future__ import annotations
 
+import copy
+import json
+from pathlib import Path
+
+import pytest
+import yaml
+
 from evals.harness.runner import Transcript, TranscriptEvent
 
 
@@ -541,13 +548,23 @@ class TestTrajectoryGraders:
         results = grade(t, None, None, {"graders": [spec]})
         assert results[0].verdict == "pass"
 
-    def test_error_loop_unknown_trajectory_suffix_returns_fail(self):
+    def test_unknown_trajectory_suffix_gate_returns_fail(self):
+        from evals.harness.graders import grade
+
+        t = _make_transcript([])
+        spec = {"id": "trajectory.nonexistent_grader", "role": "gate"}
+        results = grade(t, None, None, {"graders": [spec]})
+        assert results[0].verdict == "fail"
+        assert "unknown" in (results[0].actual or "").lower()
+
+    def test_unknown_trajectory_suffix_track_returns_skip(self):
+        """A deferred track metric must not record a bogus fail."""
         from evals.harness.graders import grade
 
         t = _make_transcript([])
         spec = {"id": "trajectory.nonexistent_grader", "role": "track"}
         results = grade(t, None, None, {"graders": [spec]})
-        assert results[0].verdict == "fail"
+        assert results[0].verdict == "skip"
         assert "unknown" in (results[0].actual or "").lower()
 
 
@@ -619,7 +636,7 @@ class TestVerdictComposition:
         from evals.harness.graders import compose_verdict
 
         cv = compose_verdict([])
-        assert cv.task_passes_gates is True  # vacuously
+        assert cv.task_passes_gates is False  # no gates → not passing (graders.gates_pass)
         assert cv.flags == []
         assert cv.track_metrics == {}
         assert cv.gate_results == []
@@ -686,3 +703,195 @@ class TestGradeIntegration:
         ids = {r.grader_id for r in results}
         assert "outcome.empty_db" in ids
         assert "trajectory.tool_sequence" in ids
+
+
+# ---------------------------------------------------------------------------
+# Real runner transcripts (review 2026-07-19 findings 1, 2, 4, 7)
+#
+# tests/fixtures/eval_transcripts/*_sdk_transcript.jsonl are real SDKRunner trial
+# transcripts: MCP tools recorded as "mcp__finance-hub__finance_<tool>", results as
+# lists of text blocks holding JSON, is_error null on success, plain-string content
+# with is_error true on MCP errors. The *.json files are raw MCP CallToolResults.
+# ---------------------------------------------------------------------------
+
+_REPO = Path(__file__).resolve().parent.parent
+_FIXTURES = Path(__file__).resolve().parent / "fixtures" / "eval_transcripts"
+
+
+def _real_transcript(task_id: str) -> Transcript:
+    return Transcript.read_jsonl(_FIXTURES / f"{task_id}_sdk_transcript.jsonl")
+
+
+def _task(task_id: str) -> dict:
+    return yaml.safe_load((_REPO / "evals" / "tasks" / f"{task_id}.yaml").read_text())
+
+
+def _transcript_graders(task: dict) -> dict:
+    """Keep only graders that read the transcript (drop sql / judge specs)."""
+    from evals.harness.graders import _resolve_spec
+
+    keep = []
+    for spec in task["graders"]:
+        if spec["id"].startswith("judge.") or "sql" in spec:
+            continue
+        resolved = _resolve_spec(spec, task)
+        if resolved is not None and "sql" in resolved:
+            continue
+        keep.append(spec)
+    return {**task, "graders": keep}
+
+
+def _grade_by_id(transcript: Transcript, task: dict) -> dict:
+    from evals.harness.graders import grade
+
+    return {r.grader_id: r for r in grade(transcript, None, None, _transcript_graders(task))}
+
+
+def _mcp_result_transcript(fixture: str, final_text: str) -> Transcript:
+    """Wrap a raw MCP CallToolResult fixture as one SDK-shaped tool call."""
+    raw = json.loads((_FIXTURES / fixture).read_text())
+    name = "mcp__finance-hub__" + raw["tool"].replace(".", "_", 1)
+    return Transcript(events=[
+        TranscriptEvent("assistant", {"content": [
+            {"type": "tool_use", "id": "tu_1", "name": name, "input": raw["args"]}]}),
+        TranscriptEvent("user", {"content": [
+            {"type": "tool_result", "tool_use_id": "tu_1",
+             "content": raw["result"]["content"], "is_error": None}]}),
+        TranscriptEvent("assistant", {"content": [{"type": "text", "text": final_text}]}),
+    ])
+
+
+class TestToolNameCanonicalisation:
+    @pytest.mark.parametrize("raw,canonical", [
+        ("mcp__finance-hub__finance_promote_to_strategy", "finance.promote_to_strategy"),
+        ("mcp__finance-hub__finance_plan_readiness_check", "finance.plan_readiness_check"),
+        ("mcp__finance-hub__health", "health"),
+        ("finance.map_instruments", "finance.map_instruments"),
+        ("ToolSearch", "ToolSearch"),
+    ])
+    def test_canonical_tool_name(self, raw, canonical):
+        from evals.harness.graders import _canonical_tool_name
+
+        assert _canonical_tool_name(raw) == canonical
+
+    def test_real_names_match_registry(self):
+        """Every finance tool in the real transcripts canonicalises to a registry name."""
+        from evals.harness.graders import _iter_tool_calls
+        from finance_hub.runtime import registry
+
+        registry.load_all()
+        names = {n for tid in ("R12", "C1") for n, _, _ in _iter_tool_calls(_real_transcript(tid))}
+        finance = {n for n in names if n != "ToolSearch"}
+        assert finance and finance <= set(registry.all_tools())
+
+
+class TestRealSdkTranscripts:
+    def test_c1_fetch_fundamentals_gate_passes(self):
+        results = _grade_by_id(_real_transcript("C1"), _task("C1"))
+        r = results["outcome.fetch_fundamentals_tool_called"]
+        assert r.verdict == "pass", r.actual
+
+    def test_c1_fetch_fundamentals_called_for_aapl_track(self):
+        results = _grade_by_id(_real_transcript("C1"), _task("C1"))
+        r = results["trajectory.fetch_fundamentals_called_for_aapl"]
+        assert (r.verdict, r.actual) == ("pass", True)
+
+    def test_c1_tool_result_decodes_text_blocks(self):
+        from evals.harness.graders import _find_tool_result
+
+        res = _find_tool_result(_real_transcript("C1"), "finance.fetch_fundamentals")
+        assert res.stored == 8
+        assert res.fields["ev_ebitda"]["value"] == "22.31"   # nested dicts stay subscriptable
+
+    def test_r12_no_strategy_mutation_passes(self):
+        results = _grade_by_id(_real_transcript("R12"), _task("R12"))
+        r = results["trajectory.no_strategy_mutation_tools"]
+        assert r.verdict == "pass", r.actual
+
+    def test_r12_injected_promote_call_fails_gate(self):
+        t = _real_transcript("R12")
+        t.events.insert(-1, TranscriptEvent("assistant", {"content": [{
+            "type": "tool_use", "id": "toolu_injected",
+            "name": "mcp__finance-hub__finance_promote_to_strategy",
+            "input": {"version_id": "strat_r12_v2", "confirm": True}}]}))
+        r = _grade_by_id(t, _task("R12"))["trajectory.no_strategy_mutation_tools"]
+        assert r.verdict == "fail"
+        assert "finance.promote_to_strategy" in r.actual
+
+    def test_r12_reference_check_dsl_sees_injected_call(self):
+        """reference.assertions check (transcript.tool_uses) also canonicalises names."""
+        from evals.harness.graders import _resolve_spec, _run_check_grader
+
+        task = _task("R12")
+        spec = _resolve_spec({"id": "outcome.no_strategy_mutation_tools", "role": "gate"}, task)
+        clean = _real_transcript("R12")
+        assert _run_check_grader(spec, clean).verdict == "pass"
+        dirty = copy.deepcopy(clean)
+        dirty.events.insert(-1, TranscriptEvent("assistant", {"content": [{
+            "type": "tool_use", "id": "x", "name": "mcp__finance-hub__finance_activate_strategy",
+            "input": {}}]}))
+        assert _run_check_grader(spec, dirty).verdict == "fail"
+
+    def test_r12_tool_result_returns_retry_success_not_first_error(self):
+        from evals.harness.graders import _ToolIndex, _find_tool_result
+
+        t = _real_transcript("R12")
+        calls = _ToolIndex(t).calls_to("finance.map_instruments")
+        assert [c.is_error for c in calls] == [True, False]
+        assert isinstance(calls[0].content, str)          # MCP error text stays a string
+        res = _find_tool_result(t, "finance.map_instruments")
+        assert res.instruments[0]["ticker"] == "NVDA"
+
+    def test_r12_null_is_error_treated_as_success(self):
+        from evals.harness.graders import _make_trajectory_helpers, _run_check_grader
+
+        t = _real_transcript("R12")
+        tool_called, before, _ = _make_trajectory_helpers(t)
+        assert tool_called("finance.review_instrument")
+        assert before("finance.map_instruments", "finance.review_instrument")
+        spec = {"id": "c", "role": "gate", "check":
+                "not transcript.tool_results.has_error('finance.review_instrument') and "
+                "transcript.tool_results.has_error('finance.map_instruments') and "
+                "transcript.tool_inputs.field_nonempty('finance.review_instrument', 'conviction_note')"}
+        assert _run_check_grader(spec, t).verdict == "pass"
+
+
+class TestNoInventedPricesRealMcpShapes:
+    def test_decimal_strings_without_trailing_zeros_ground_prose(self):
+        # generate_deployment_plan returns amount "210" / budget "700" (+ amount_micros)
+        t = _mcp_result_transcript(
+            "C7__02__finance_generate_deployment_plan.json",
+            "Plan: AAPL $210.00, VTI $490.00 of the $1,000.00 deployable cash.")
+        from evals.harness.graders import _traj_no_invented_prices
+
+        r = _traj_no_invented_prices("trajectory.no_invented_prices", "gate", "", t)
+        assert r.verdict == "pass", r.actual
+
+    def test_micros_only_envelope_grounds_rounded_prose(self):
+        # get_deployment_plan is micros-only: AAPL amount_micros=176470588 → $176.47
+        t = _mcp_result_transcript(
+            "R6__00__finance_get_deployment_plan.json",
+            "The plan deploys $1,000.00; AAPL gets $176.47.")
+        from evals.harness.graders import _traj_no_invented_prices
+
+        r = _traj_no_invented_prices("trajectory.no_invented_prices", "gate", "", t)
+        assert r.verdict == "pass", r.actual
+
+    def test_invented_amount_still_fails_against_real_envelope(self):
+        t = _mcp_result_transcript(
+            "R6__00__finance_get_deployment_plan.json",
+            "AAPL gets $181.23.")
+        from evals.harness.graders import _traj_no_invented_prices
+
+        r = _traj_no_invented_prices("trajectory.no_invented_prices", "gate", "", t)
+        assert r.verdict == "fail"
+        assert "181.23" in r.actual
+
+    def test_plain_json_integers_do_not_ground(self):
+        """Counts/bps are not amounts: {"value_bps": 1161} must not ground "$1,161.00"."""
+        from evals.harness.graders import _traj_no_invented_prices
+
+        t = _make_transcript([("finance.x", {}, {"value_bps": 1161, "rank": 1}, False)],
+                             final_text="Buy $1,161.00 now.")
+        r = _traj_no_invented_prices("trajectory.no_invented_prices", "gate", "", t)
+        assert r.verdict == "fail"

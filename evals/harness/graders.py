@@ -18,6 +18,11 @@ Helpers available in check expressions:
   transcript.tool_results.has_error(n)  — True if any tool_result for n has is_error=true
   transcript.tool_inputs.field_nonempty(tool, field) — True if any successful call has non-empty field
 
+Tool names are canonicalised to the registry form ("finance.<tool>"): real runner
+transcripts record MCP tools as "mcp__finance-hub__finance_<tool>" (see
+_canonical_tool_name). Tool-result content is decoded (SDK text blocks → joined
+text → JSON when parseable) before helpers/graders see it (see _decode_tool_content).
+
 Verdict composition (spec §6.4):
   compose_verdict(results) → ComposedVerdict
   - gate  → pass/fail (task passes iff all gate verdicts pass)
@@ -29,7 +34,8 @@ Grader spec resolution order:
   2. If the id starts with `trajectory.`, dispatch to the built-in handler.
   3. If the id starts with `judge.`, dispatch to the LLM-judge handler (§6.3).
   4. Otherwise strip the namespace prefix and look up in reference.assertions.
-  5. If still not found: others → skip (deferred).
+  5. If still not found: others → skip (deferred); unknown trajectory.* gates → fail,
+     unknown trajectory.* track/flag → skip.
 """
 from __future__ import annotations
 
@@ -39,6 +45,7 @@ import json
 import re
 import sqlite3
 from dataclasses import dataclass, field
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -95,11 +102,121 @@ class ComposedVerdict:
 
 
 # ---------------------------------------------------------------------------
+# Transcript tool index — the one walker every helper/proxy/grader reads
+# ---------------------------------------------------------------------------
+
+def _canonical_tool_name(name: str) -> str:
+    """Map a transcript tool name to its registry form ("finance.<tool>").
+
+    Claude Code exposes an MCP tool as "mcp__<server>__<tool>" with the dots in the
+    registry name sanitised to underscores, so the real runner records
+    "mcp__finance-hub__finance_promote_to_strategy" for "finance.promote_to_strategy".
+    Rule: strip "mcp__<server>__"; then, because every finance registry name is
+    "finance.<snake_case>", turn only the FIRST "finance_" back into "finance."
+    (later underscores belong to the tool name). Already-dotted names (hand-written
+    goldens/tests) and non-MCP tools (ToolSearch, Read, ...) pass through unchanged.
+    """
+    if not name.startswith("mcp__"):
+        return name
+    _server, sep, tool = name[len("mcp__"):].partition("__")
+    if not sep:
+        return name
+    if tool.startswith("finance_"):
+        return "finance." + tool[len("finance_"):]
+    return tool
+
+
+def _decode_tool_content(raw: Any) -> Any:
+    """Decode a tool_result's content into the value the tool returned.
+
+    The SDK records MCP results as a list of content blocks; finance tools return
+    one text block holding JSON. Text blocks are joined and json-parsed; a plain
+    string is json-parsed when possible (MCP error text stays a string). Lists with
+    no text blocks (e.g. ToolSearch tool_reference blocks) and dicts (hand-written
+    transcripts) are returned unchanged.
+    """
+    if isinstance(raw, list):
+        texts = [
+            b.get("text", "") for b in raw
+            if isinstance(b, dict) and b.get("type") == "text"
+        ]
+        if not texts:
+            return raw
+        raw = "".join(texts)
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)
+        except ValueError:
+            return raw
+    return raw
+
+
+@dataclass
+class _ToolCall:
+    """One tool_use with its matched tool_result (if any)."""
+
+    id: str
+    name: str                  # canonical (registry) name
+    input: dict
+    content: Any = None        # decoded result content
+    is_error: bool = False     # null/missing is_error → False
+    has_result: bool = False
+
+
+class _ToolIndex:
+    """Single pass over a transcript: tool calls in order, each matched to its result.
+
+    results keeps every tool_result in transcript order (including orphans with no
+    matching tool_use) as (tool_use_id, decoded content, is_error).
+    """
+
+    def __init__(self, transcript: Transcript) -> None:
+        self.calls: list[_ToolCall] = []
+        self.results: list[tuple[str, Any, bool]] = []
+        for event in transcript.events:
+            content = event.data.get("content", [])
+            if not isinstance(content, list):
+                continue
+            for b in content:
+                if not isinstance(b, dict):
+                    continue
+                if event.type == "assistant" and b.get("type") == "tool_use":
+                    self.calls.append(_ToolCall(
+                        id=b.get("id", ""),
+                        name=_canonical_tool_name(b.get("name", "")),
+                        input=b.get("input") or {},
+                    ))
+                elif event.type == "user" and b.get("type") == "tool_result":
+                    self.results.append((
+                        b.get("tool_use_id", ""),
+                        _decode_tool_content(b.get("content")),
+                        bool(b.get("is_error")),
+                    ))
+        by_id = {c.id: c for c in self.calls}
+        for tuid, content, is_error in self.results:
+            call = by_id.get(tuid)
+            if call is not None:
+                call.content, call.is_error, call.has_result = content, is_error, True
+
+    @property
+    def names(self) -> list[str]:
+        return [c.name for c in self.calls]
+
+    def calls_to(self, name: str) -> list[_ToolCall]:
+        name = _canonical_tool_name(name)
+        return [c for c in self.calls if c.name == name]
+
+
+# ---------------------------------------------------------------------------
 # Transcript DSL helpers — used in check expressions
 # ---------------------------------------------------------------------------
 
 class _DictNamespace:
-    """Wrap a dict so attribute-style access works in check expressions."""
+    """Wrap a dict so attribute-style access works in check expressions.
+
+    Only the top level is wrapped; nested dicts stay plain so subscripting
+    (`tool_result(x).readiness['one_time']`) keeps working.
+    """
 
     def __init__(self, d: dict) -> None:
         self.__dict__.update(d)
@@ -111,85 +228,39 @@ class _DictNamespace:
 class _ToolUsesProxy:
     """transcript.tool_uses — check tool presence in assistant turns."""
 
-    def __init__(self, transcript: Transcript) -> None:
-        self._names = [
-            b.get("name")
-            for e in transcript.events if e.type == "assistant"
-            for b in e.data.get("content", [])
-            if isinstance(b, dict) and b.get("type") == "tool_use"
-        ]
+    def __init__(self, index: _ToolIndex) -> None:
+        self._index = index
 
     def contains(self, name: str) -> bool:
-        return name in self._names
+        return bool(self._index.calls_to(name))
 
     def not_contains(self, name: str) -> bool:
-        return name not in self._names
+        return not self.contains(name)
 
 
 class _ToolResultsProxy:
     """transcript.tool_results — check error/success patterns in tool results."""
 
-    def __init__(self, transcript: Transcript) -> None:
-        id_to_name: dict[str, str] = {}
-        for e in transcript.events:
-            if e.type != "assistant":
-                continue
-            for b in e.data.get("content", []):
-                if isinstance(b, dict) and b.get("type") == "tool_use":
-                    id_to_name[b.get("id", "")] = b.get("name", "")
-
-        self._results: list[tuple[str, bool]] = []
-        for e in transcript.events:
-            if e.type != "user":
-                continue
-            content = e.data.get("content", [])
-            if isinstance(content, str):
-                continue
-            for b in content:
-                if isinstance(b, dict) and b.get("type") == "tool_result":
-                    tuid = b.get("tool_use_id", "")
-                    name = id_to_name.get(tuid, "")
-                    self._results.append((name, bool(b.get("is_error"))))
+    def __init__(self, index: _ToolIndex) -> None:
+        self._index = index
 
     def has_error(self, tool_name: str) -> bool:
         """True if any tool_result for this tool has is_error=true."""
-        return any(n == tool_name and err for n, err in self._results)
+        return any(c.has_result and c.is_error for c in self._index.calls_to(tool_name))
 
 
 class _ToolInputsProxy:
     """transcript.tool_inputs — inspect input fields of tool calls."""
 
-    def __init__(self, transcript: Transcript) -> None:
-        self._id_to_call: dict[str, tuple[str, dict]] = {}
-        for e in transcript.events:
-            if e.type != "assistant":
-                continue
-            for b in e.data.get("content", []):
-                if isinstance(b, dict) and b.get("type") == "tool_use":
-                    self._id_to_call[b.get("id", "")] = (
-                        b.get("name", ""),
-                        b.get("input", {}),
-                    )
-
-        self._id_is_error: dict[str, bool] = {}
-        for e in transcript.events:
-            if e.type != "user":
-                continue
-            content = e.data.get("content", [])
-            if isinstance(content, str):
-                continue
-            for b in content:
-                if isinstance(b, dict) and b.get("type") == "tool_result":
-                    self._id_is_error[b.get("tool_use_id", "")] = bool(b.get("is_error"))
+    def __init__(self, index: _ToolIndex) -> None:
+        self._index = index
 
     def field_nonempty(self, tool_name: str, field_name: str) -> bool:
         """True if any SUCCESSFUL call to tool_name has a non-empty value for field."""
-        for tuid, (name, inp) in self._id_to_call.items():
-            if name != tool_name:
+        for call in self._index.calls_to(tool_name):
+            if call.is_error:
                 continue
-            if self._id_is_error.get(tuid):
-                continue
-            val = inp.get(field_name)
+            val = call.input.get(field_name)
             if val and str(val).strip():
                 return True
         return False
@@ -198,10 +269,10 @@ class _ToolInputsProxy:
 class _TranscriptProxy:
     """transcript DSL object exposed in check expressions."""
 
-    def __init__(self, transcript: Transcript) -> None:
-        self.tool_uses = _ToolUsesProxy(transcript)
-        self.tool_results = _ToolResultsProxy(transcript)
-        self.tool_inputs = _ToolInputsProxy(transcript)
+    def __init__(self, index: _ToolIndex) -> None:
+        self.tool_uses = _ToolUsesProxy(index)
+        self.tool_results = _ToolResultsProxy(index)
+        self.tool_inputs = _ToolInputsProxy(index)
 
 
 # ---------------------------------------------------------------------------
@@ -240,52 +311,30 @@ class _WorkspaceProxy:
 # Internal: find tool result in transcript
 # ---------------------------------------------------------------------------
 
-def _find_tool_result(transcript: Transcript, tool_name: str) -> Any:
-    """Return the content of the last tool result for tool_name in transcript."""
-    for event in transcript.events:
-        if event.type != "assistant":
-            continue
-        for block in event.data.get("content", []):
-            if block.get("type") != "tool_use" or block.get("name") != tool_name:
-                continue
-            tool_use_id = block.get("id")
-            for ue in transcript.events:
-                if ue.type != "user":
-                    continue
-                content = ue.data.get("content", [])
-                if isinstance(content, str):
-                    continue
-                for ub in content:
-                    if (
-                        ub.get("type") == "tool_result"
-                        and ub.get("tool_use_id") == tool_use_id
-                    ):
-                        raw = ub.get("content")
-                        return _DictNamespace(raw) if isinstance(raw, dict) else raw
+def _find_tool_result(transcript: Transcript | _ToolIndex, tool_name: str) -> Any:
+    """Return the decoded content of the LAST call to tool_name that has a result.
+
+    A dict result is wrapped in _DictNamespace for attribute access. Returns None
+    when the tool was never called (or no call has a recorded result).
+    """
+    index = transcript if isinstance(transcript, _ToolIndex) else _ToolIndex(transcript)
+    for call in reversed(index.calls_to(tool_name)):
+        if call.has_result:
+            c = call.content
+            return _DictNamespace(c) if isinstance(c, dict) else c
     return None
 
 
-def _tool_calls_ordered(transcript: Transcript) -> list[tuple[str, dict]]:
-    """Return (name, input) for every tool_use in transcript order."""
-    calls = []
-    for event in transcript.events:
-        if event.type != "assistant":
-            continue
-        for block in event.data.get("content", []):
-            if block.get("type") == "tool_use":
-                calls.append((block.get("name", ""), block.get("input", {})))
-    return calls
-
-
-def _make_trajectory_helpers(transcript: Transcript):
+def _make_trajectory_helpers(transcript: Transcript | _ToolIndex):
     """Build the tool_called / tool_call_before / tool_input helpers."""
-    calls = _tool_calls_ordered(transcript)
-    names = [name for name, _ in calls]
+    index = transcript if isinstance(transcript, _ToolIndex) else _ToolIndex(transcript)
+    names = index.names
 
     def tool_called(name: str) -> bool:
-        return name in names
+        return _canonical_tool_name(name) in names
 
     def tool_call_before(first: str, second: str) -> bool:
+        first, second = _canonical_tool_name(first), _canonical_tool_name(second)
         try:
             first_idx = names.index(first)
         except ValueError:
@@ -293,10 +342,11 @@ def _make_trajectory_helpers(transcript: Transcript):
         return any(name == second and i > first_idx for i, name in enumerate(names))
 
     def tool_input(name: str, field: str = None) -> Any:
-        for n, inp in reversed(calls):
-            if n == name:
-                return inp.get(field) if field is not None else inp
-        return None
+        calls = index.calls_to(name)
+        if not calls:
+            return None
+        inp = calls[-1].input
+        return inp.get(field) if field is not None else inp
 
     return tool_called, tool_call_before, tool_input
 
@@ -380,10 +430,12 @@ def _run_check_grader(
     # Preprocess DSL: "X is empty" → "X == []"
     check_expr = re.sub(r"\bis\s+empty\b", "== []", check_expr)
 
-    def tool_result(tool_name: str) -> Any:
-        return _find_tool_result(transcript, tool_name)
+    index = _ToolIndex(transcript)
 
-    tool_called, tool_call_before, tool_input = _make_trajectory_helpers(transcript)
+    def tool_result(tool_name: str) -> Any:
+        return _find_tool_result(index, tool_name)
+
+    tool_called, tool_call_before, tool_input = _make_trajectory_helpers(index)
 
     ns = {
         "__builtins__": {},
@@ -391,7 +443,7 @@ def _run_check_grader(
         "tool_called": tool_called,
         "tool_call_before": tool_call_before,
         "tool_input": tool_input,
-        "transcript": _TranscriptProxy(transcript),
+        "transcript": _TranscriptProxy(index),
         "workspace": _WorkspaceProxy(workspace),
         "bool": bool,
         "len": len,
@@ -413,32 +465,16 @@ def _run_check_grader(
 # ---------------------------------------------------------------------------
 
 def _iter_tool_calls(transcript: Transcript) -> Iterator[tuple[str, dict, str]]:
-    """Yield (tool_name, input_dict, tool_use_id) for each tool_use in order."""
-    for event in transcript.events:
-        if event.type != "assistant":
-            continue
-        for block in event.data.get("content", []):
-            if isinstance(block, dict) and block.get("type") == "tool_use":
-                yield block["name"], block.get("input", {}), block.get("id", "")
+    """Yield (canonical tool_name, input_dict, tool_use_id) for each tool_use in order."""
+    for call in _ToolIndex(transcript).calls:
+        yield call.name, call.input, call.id
 
 
 def _iter_tool_results_data(
     transcript: Transcript,
 ) -> Iterator[tuple[str, Any, bool]]:
-    """Yield (tool_use_id, content, is_error) for each tool_result."""
-    for event in transcript.events:
-        if event.type != "user":
-            continue
-        content = event.data.get("content", [])
-        if isinstance(content, str):
-            continue
-        for block in content:
-            if isinstance(block, dict) and block.get("type") == "tool_result":
-                yield (
-                    block.get("tool_use_id", ""),
-                    block.get("content"),
-                    bool(block.get("is_error", False)),
-                )
+    """Yield (tool_use_id, decoded content, is_error) for each tool_result."""
+    yield from _ToolIndex(transcript).results
 
 
 def _final_text(transcript: Transcript) -> str:
@@ -467,10 +503,71 @@ def _extract_financial_numbers(text: str) -> set[str]:
         n = m.group().lstrip("$").replace(",", "")
         if n:
             numbers.add(n)
-    # Standalone decimal numbers: 234.56, 1234.56 (not preceded by $)
-    for m in re.finditer(r"(?<!\$)\b(\d+\.\d{2,})\b", text):
-        numbers.add(m.group())
+    # Standalone decimal numbers: 234.56, 1234.56, 1,234.56 (not preceded by $). The
+    # lookbehind also rejects a digit/comma/dot so "$12,345.67" never yields "345.67".
+    for m in re.finditer(r"(?<![$\d,.])(?:\d{1,3}(?:,\d{3})+|\d+)\.\d{2,}(?![\d.])", text):
+        numbers.add(m.group().replace(",", ""))
     return numbers
+
+
+_NUMERIC_STR_RE = re.compile(r"-?\d+(?:\.\d+)?")
+_DECIMAL_TOKEN_RE = re.compile(r"(?<![\d.])\d+\.\d+(?![\d.])")
+_MICROS = Decimal(1_000_000)
+
+
+def _to_decimal(value: Any) -> Decimal | None:
+    try:
+        return Decimal(str(value).strip())
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def _is_grounded(value: Decimal | None, grounded: set[Decimal]) -> bool:
+    """True if value equals a grounded amount, or one rounded to value's precision."""
+    if value is None:
+        return False
+    if value in grounded:
+        return True
+    step = Decimal(1).scaleb(value.as_tuple().exponent)
+    for g in grounded:
+        try:
+            if g.quantize(step, rounding=ROUND_HALF_UP) == value:
+                return True
+        except InvalidOperation:
+            continue
+    return False
+
+
+def _grounded_amounts(content: Any, out: set[Decimal], key: str = "") -> None:
+    """Collect the money/price amounts a decoded tool result grounds, into `out`.
+
+    Conservative by design — plain JSON integers (counts, bps, ids) are NOT amounts:
+      - integer (or numeric-string) value under a key ending "_micros" → value ÷ 1e6
+      - string that is wholly numeric ("700", "190.5") → its value
+      - decimal tokens embedded in a string ("close 185.20 on …") → their values
+      - JSON float → its value
+    """
+    if isinstance(content, dict):
+        for k, v in content.items():
+            _grounded_amounts(v, out, str(k))
+    elif isinstance(content, list):
+        for v in content:
+            _grounded_amounts(v, out, key)
+    elif isinstance(content, bool) or content is None:
+        return
+    elif key.endswith("_micros") and isinstance(content, (int, str)):
+        d = _to_decimal(content)
+        if d is not None and d == d.to_integral_value():
+            out.add(d / _MICROS)
+    elif isinstance(content, float):
+        d = _to_decimal(content)
+        if d is not None:
+            out.add(d)
+    elif isinstance(content, str):
+        if _NUMERIC_STR_RE.fullmatch(content.strip()):
+            out.add(Decimal(content.strip()))
+        for m in _DECIMAL_TOKEN_RE.finditer(content):
+            out.add(Decimal(m.group()))
 
 
 # ---------------------------------------------------------------------------
@@ -540,17 +637,21 @@ def _traj_no_invented_prices(
     gid: str, role: str, detail: str, transcript: Transcript
 ) -> GraderResult:
     """Gate: deterministic groundedness — every financial number in the final prose
-    must appear (as a string) in some tool result.
+    must numerically equal some amount in a tool result.
 
     Catches the most common invented-price failure (spec §6.2): an agent writing a
-    price value that has no basis in any tool result. Blunt check — known limitation:
-    micros-to-dollars conversions may cause false positives for non-round amounts;
-    the LLM judge (§6.3) covers qualitative grounding for the long tail.
+    price value that has no basis in any tool result. Comparison is by Decimal value
+    (so "$1,000.00" matches "1000" and "190.50" matches "190.5"); a source amount
+    rounded half-up to the prose's precision also counts, so 176470588 micros grounds
+    "$176.47" (see _is_grounded). Grounded amounts are
+    collected conservatively (see _grounded_amounts): integer *_micros fields ÷ 1e6,
+    whole-string numerics ("700", "190.5"), decimal tokens inside strings, and JSON
+    floats — never arbitrary JSON integers (counts, bps, ids). The LLM judge (§6.3)
+    covers qualitative grounding for the long tail.
     """
-    # Collect all tool result content as one concatenated JSON string for substring search.
-    tool_result_json = "".join(
-        json.dumps(content, default=str) for _, content, _ in _iter_tool_results_data(transcript)
-    )
+    grounded: set[Decimal] = set()
+    for _, content, _ in _iter_tool_results_data(transcript):
+        _grounded_amounts(content, grounded)
 
     final_prose = _final_text(transcript)
     prose_numbers = _extract_financial_numbers(final_prose)
@@ -558,7 +659,7 @@ def _traj_no_invented_prices(
     if not prose_numbers:
         return GraderResult(gid, role, "pass", detail, actual="no financial numbers in prose")
 
-    invented = sorted(n for n in prose_numbers if n not in tool_result_json)
+    invented = sorted(n for n in prose_numbers if not _is_grounded(_to_decimal(n), grounded))
     if invented:
         return GraderResult(gid, role, "fail", detail, actual=f"invented: {invented}")
     return GraderResult(gid, role, "pass", detail, actual=f"grounded: {sorted(prose_numbers)}")
@@ -675,21 +776,11 @@ def _traj_error_loop(
     Routes to flag, not gate, so a discovered loop reaches the human review queue
     without blocking a task that otherwise passes its gate graders (spec §6.2).
     """
-    # Map each tool_use_id → (name, serialised_input)
-    uid_to_call: dict[str, tuple[str, str]] = {}
-    for name, inp, uid in _iter_tool_calls(transcript):
-        uid_to_call[uid] = (name, json.dumps(inp, sort_keys=True))
-
-    # Map each tool_use_id → is_error
-    uid_to_error: dict[str, bool] = {
-        uid: is_error for uid, _, is_error in _iter_tool_results_data(transcript)
-    }
-
-    # Count failing runs per (name, input) key
+    # Count failing calls per (name, serialised input) key
     fail_counts: dict[tuple[str, str], int] = {}
-    for uid, (name, inp_str) in uid_to_call.items():
-        if uid_to_error.get(uid, False):
-            key = (name, inp_str)
+    for call in _ToolIndex(transcript).calls:
+        if call.is_error:
+            key = (call.name, json.dumps(call.input, sort_keys=True))
             fail_counts[key] = fail_counts.get(key, 0) + 1
 
     loops = [(k[0], count) for k, count in fail_counts.items() if count >= 2]
@@ -697,6 +788,17 @@ def _traj_error_loop(
         desc = "; ".join(f"{n} failed identically {c}x" for n, c in loops)
         return GraderResult(gid, role, "fail", detail, actual=desc)
     return GraderResult(gid, role, "pass", detail, actual="no error loops detected")
+
+
+def _traj_fetch_fundamentals_called_for_aapl(
+    gid: str, role: str, detail: str, transcript: Transcript
+) -> GraderResult:
+    """Track (C1): report whether finance.fetch_fundamentals was called with ticker AAPL."""
+    called = any(
+        str(c.input.get("ticker", "")).upper() == "AAPL"
+        for c in _ToolIndex(transcript).calls_to("finance.fetch_fundamentals")
+    )
+    return GraderResult(gid, role, "pass", detail, actual=called)
 
 
 # Dispatch table: ID suffix → handler
@@ -714,7 +816,23 @@ _TRAJECTORY_HANDLERS: dict[str, Any] = {
     "retry_with_note": _traj_retry_with_note,
     "no_strategy_mutation_tools": _traj_no_strategy_mutation_tools,
     "error_loop": _traj_error_loop,
+    "fetch_fundamentals_called_for_aapl": _traj_fetch_fundamentals_called_for_aapl,
 }
+
+
+def _unknown_trajectory_result(gid: str, role: str, detail: str, suffix: str) -> GraderResult:
+    """No handler and no reference assertion for a trajectory grader.
+
+    A gate must not pass vacuously → fail. A track/flag has nothing to measure yet
+    (several capability tasks declare deferred track metrics) → skip, so it neither
+    records a bogus metric nor floods the human-review flag queue.
+    """
+    if role == "gate":
+        return GraderResult(gid, role, "fail", detail, actual=f"unknown trajectory grader: {suffix!r}")
+    return GraderResult(
+        gid, role, "skip", detail,
+        actual=f"deferred: unknown trajectory grader {suffix!r} (no built-in handler or reference assertion)",
+    )
 
 
 def _run_trajectory_grader(spec: dict, transcript: Transcript) -> GraderResult:
@@ -726,10 +844,7 @@ def _run_trajectory_grader(spec: dict, transcript: Transcript) -> GraderResult:
     suffix = gid.split(".", 1)[-1]
     handler = _TRAJECTORY_HANDLERS.get(suffix)
     if handler is None:
-        return GraderResult(
-            gid, role, "fail", detail,
-            actual=f"unknown trajectory grader: {suffix!r}",
-        )
+        return _unknown_trajectory_result(gid, role, detail, suffix)
     return handler(gid, role, detail, transcript)
 
 
@@ -740,9 +855,10 @@ def _run_trajectory_grader(spec: dict, transcript: Transcript) -> GraderResult:
 def _invoke_judge(prompt: str, judge_model: str) -> str:
     """Call the LLM judge via Agent SDK; returns the raw response text.
 
-    Runs the async SDK call in a fresh thread with its own event loop so that
-    grade() remains synchronous even when called from inside an asyncio event
-    loop (e.g. from _run_one_trial_async inside harness.run).
+    Blocking. Runs the async SDK call in a fresh thread with its own event loop so
+    grade() stays synchronous even when called with an event loop running in the
+    current thread. harness.run calls grade() via asyncio.to_thread, so this never
+    blocks the shared trial loop.
     """
     async def _call() -> str:
         from claude_agent_sdk import query, ClaudeAgentOptions, AssistantMessage, TextBlock
@@ -952,7 +1068,28 @@ def _run_judge_grader(
     prompt = _build_judge_prompt(rubric, context, spec)
     judge_model = spec.get("judge_model", rubric.get("judge_model", "claude-sonnet-5"))
 
-    response = _invoke_judge(prompt, judge_model)
+    try:
+        response = _invoke_judge(prompt, judge_model)
+    except Exception as exc:
+        # A judge failure (e.g. CLIConnectionError) must not escape grade() and
+        # take the trial's deterministic verdicts down with it. Same shape as the
+        # parse-error rows: one failed flag per dimension for human review.
+        rubric_dims = list(rubric.get("dimensions", {}).keys())
+        return [
+            GraderResult(
+                grader_id=f"{spec['id']}.{dim}",
+                role="flag",
+                verdict="fail",
+                detail=f"judge invocation error: {type(exc).__name__}: {exc}",
+                actual={
+                    "dimension": dim,
+                    "rubric_id": rubric.get("id", "unknown"),
+                    "judge_version": judge_model,
+                    "judge_error": f"{type(exc).__name__}: {exc}",
+                },
+            )
+            for dim in spec.get("dimensions", rubric_dims)
+        ]
     return _parse_judge_response(response, rubric, spec)
 
 
@@ -960,10 +1097,22 @@ def _run_judge_grader(
 # Verdict composition (spec §6.4)
 # ---------------------------------------------------------------------------
 
+def gates_pass(results: list[GraderResult]) -> bool:
+    """Single source of truth for "this trial passes its gates" (spec §6.4).
+
+    True iff at least one gate verdict exists and every gate verdict is 'pass'.
+    A trial with no gate rows does NOT pass: an all-track/flag task has no outcome
+    to pass on, and pass^k must not be vacuously true. Used by grade() (judge
+    gating), compose_verdict(), and harness pass^k / pass@k.
+    """
+    gate = [r for r in results if r.role == "gate"]
+    return bool(gate) and all(r.verdict == "pass" for r in gate)
+
+
 def compose_verdict(results: list[GraderResult]) -> ComposedVerdict:
     """Compose grader results into a structured verdict (spec §6.4).
 
-    - gate  → task_passes_gates (False if any gate fails)
+    - gate  → task_passes_gates via gates_pass() (False if any gate fails or none exist)
     - track → track_metrics dict (grader_id → actual value) for version comparison
     - flag  → flags list — only failed flags (verdict='fail') are queued for review
     """
@@ -971,7 +1120,7 @@ def compose_verdict(results: list[GraderResult]) -> ComposedVerdict:
     track_results = [r for r in results if r.role == "track"]
     flag_results = [r for r in results if r.role == "flag"]
 
-    task_passes_gates = all(r.verdict == "pass" for r in gate_results)
+    task_passes_gates = gates_pass(results)
     track_metrics = {r.grader_id: r.actual for r in track_results}
     flags = [r for r in flag_results if r.verdict == "fail"]
 
@@ -1011,11 +1160,7 @@ def _run_one_grader(
             return _run_check_grader(resolved, transcript, workspace)
         if resolved is not None and "sql" in resolved:
             return _run_sql_grader(resolved, db_path)
-        return GraderResult(
-            grader_id=gid, role=role, verdict="fail",
-            detail=spec.get("detail", ""),
-            actual=f"unknown trajectory grader: {suffix!r}",
-        )
+        return _unknown_trajectory_result(gid, role, spec.get("detail", ""), suffix)
 
     resolved = _resolve_spec(spec, task)
     if resolved is None:
@@ -1039,6 +1184,20 @@ def _run_one_grader(
     )
 
 
+def _judge_skip_dimensions(spec: dict) -> list[str]:
+    """Dimensions for a judge spec's skip rows: the spec's own, else the rubric's.
+
+    Mirrors the run path's fallback so a rubric-only judge task still emits one skip
+    row per dimension when gates fail. A rubric that cannot be loaded yields none.
+    """
+    if "dimensions" in spec:
+        return list(spec["dimensions"])
+    try:
+        return list(_load_rubric(spec.get("rubric", "")).get("dimensions", {}).keys())
+    except Exception:
+        return []
+
+
 def grade(
     transcript: Transcript,
     db_path: Path | None,
@@ -1049,7 +1208,7 @@ def grade(
 
     Processing order (spec §6.3):
       1. Run all non-judge graders first (deterministic gates, trajectories, etc.).
-      2. Check whether all gate verdicts are 'pass'.
+      2. Check gates_pass() (≥1 gate row, all 'pass').
       3. If gates pass: run each judge.* grader, extending results with per-dimension rows.
          If gates fail: emit skip rows for each judge.* grader's declared dimensions.
     """
@@ -1066,14 +1225,13 @@ def grade(
     if not judge_specs:
         return results
 
-    gates_pass = all(r.verdict == "pass" for r in results if r.role == "gate")
+    trial_passes_gates = gates_pass(results)
 
     for spec in judge_specs:
-        if gates_pass:
+        if trial_passes_gates:
             results.extend(_run_judge_grader(spec, transcript, workspace, db_path))
         else:
-            dimensions = spec.get("dimensions", [])
-            for dim in dimensions:
+            for dim in _judge_skip_dimensions(spec):
                 results.append(GraderResult(
                     grader_id=f"{spec['id']}.{dim}",
                     role="flag",
